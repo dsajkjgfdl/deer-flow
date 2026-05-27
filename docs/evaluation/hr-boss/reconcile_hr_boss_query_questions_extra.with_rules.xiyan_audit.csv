@@ -1,0 +1,418 @@
+﻿id,question,xiyan_execution_success,xiyan_row_count,has_employee_change,has_2199_current_record_filter,has_department_or_position_scope,has_non_current_status_exclusion,current_employee_scope_ok_basic,xiyan_error,xiyan_sql
+reconcile_hr_extra_001,当前拥有正高级工程师职称的员工名单及所在子公司是什么？,True,2,True,True,True,True,True,,"SELECT DISTINCT ei.`员工姓名`, ei.`组织`
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '' OR ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ei.`最高职称级别` = '正高级'
+AND ei.`最高职称内容` = '正高级工程师';"
+reconcile_hr_extra_002,当前各子公司副高级及以上职称员工占本公司当前员工比例是多少？,True,18,True,True,True,True,True,,"SELECT
+ei.`组织` AS 子公司,
+COUNT(DISTINCT CASE WHEN ei.`最高职称级别` IN ('副高级', '正高级') THEN ei.`员工编号` END) * 100.0 / COUNT(DISTINCT ei.`员工编号`) AS 比例
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (
+(ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+OR (ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+)
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN
+('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ei.`组织` IS NOT NULL
+AND TRIM(ei.`组织`) <> ''
+AND TRIM(ei.`组织`) NOT IN ('未填写', '未知', '无', 'N/A')
+GROUP BY ei.`组织`
+ORDER BY 比例"
+reconcile_hr_extra_003,当前岗位是研发工程师但没有任何职称记录的员工有多少人？,True,1,True,True,True,True,True,,"SELECT COUNT(DISTINCT ei.`员工编号`)
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ec.`职位` = '研发工程师'
+AND (ei.`最高职称内容` IS NULL OR TRIM(ei.`最高职称内容`) = '' OR ei.`最高职称内容` = '无');"
+reconcile_hr_extra_004,当前拥有会计师职称的员工分别在哪些岗位？,True,12,True,True,True,True,True,,"SELECT DISTINCT ec.`职位`
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '' OR ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ei.`最高职称内容` = '会计师';"
+reconcile_hr_extra_005,当前初级职称员工中年龄30岁及以下的人数是多少？,True,1,True,True,True,True,True,,"SELECT COUNT(DISTINCT ei.`员工编号`)
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND ((ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '') OR (ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> ''))
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ei.`最高职称级别` = '初级'
+AND ei.`年龄` <= 30;"
+reconcile_hr_extra_006,当前职称名称为技术员但岗位不是技术员的员工有哪些？,True,2,True,True,True,True,True,,"SELECT DISTINCT ei.`员工编号`, ei.`员工姓名`
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '' OR ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ei.`最高职称内容` = '技术员'
+AND (ec.`职位` IS NULL OR TRIM(ec.`职位`) = '' OR ec.`职位` != '技术员');"
+reconcile_hr_extra_007,当前岗位名称包含“工程师”的员工按岗位分布前10是什么？,True,10,True,True,True,True,True,,"SELECT ec.`职位`, COUNT(DISTINCT ei.`员工编号`) AS cnt
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> ''
+AND TRIM(ec.`职位`) NOT IN ('未填写', '未知', '无', 'N/A')
+AND ec.`职位` LIKE '%工程师%'
+GROUP BY ec.`职位`
+ORDER BY cnt DESC
+LIMIT 10;"
+reconcile_hr_extra_008,当前操作员岗位在各子公司分别有多少人？,True,5,True,True,True,True,True,,"SELECT ei.`组织`, COUNT(DISTINCT ei.`员工编号`) AS employee_count
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ec.`职位` = '操作员'
+AND ei.`组织` IS NOT NULL
+AND TRIM(ei.`组织`) <> ''
+AND TRIM(ei.`组织`) NOT IN ('未填写', '未知', '无', 'N/A')
+GROUP BY ei.`组织`
+ORDER BY employee_count DESC;"
+reconcile_hr_extra_009,当前经理和副经理岗位分别有多少人？,True,1,True,True,True,True,True,,"SELECT
+SUM(CASE WHEN ec.`职位` LIKE '%经理%' AND ec.`职位` NOT LIKE '%副经理%' THEN 1 ELSE 0 END) AS manager_count,
+SUM(CASE WHEN ec.`职位` LIKE '%副经理%' THEN 1 ELSE 0 END) AS deputy_manager_count
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止');"
+reconcile_hr_extra_010,福建毫米电子有限公司当前检验员和QC检验员分别有多少人？,True,1,True,True,True,True,True,,"SELECT
+SUM(CASE WHEN ec.`职位` = '检验员' THEN 1 ELSE 0 END) AS `检验员人数`,
+SUM(CASE WHEN ec.`职位` = 'QC检验员' THEN 1 ELSE 0 END) AS `QC检验员人数`
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ei.`组织` = '福建毫米电子有限公司'
+AND ec.`结束日期` LIKE '2199%'
+AND (
+(ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+OR (ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+)
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN
+('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止');"
+reconcile_hr_extra_011,当前顶岗实习生岗位员工名单及所属部门是什么？,True,18,True,True,True,True,True,,"SELECT DISTINCT ei.`员工姓名`, ec.`部门`
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ec.`职位` = '顶岗实习生';"
+reconcile_hr_extra_012,当前没有当前岗位但有当前部门的员工有多少人？,True,1,True,True,True,True,True,,"SELECT COUNT(DISTINCT ei.`员工编号`)
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+AND (ec.`职位` IS NULL OR TRIM(ec.`职位`) = '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止');"
+reconcile_hr_extra_013,当前各子公司员工平均司龄排名前10是什么？,False,0,True,True,True,True,True,"Required keyword: 'expression' missing for <class 'sqlglot.expressions.query.Limit'>. Line 21, Col: 5.
+  ', '未知', '无', 'N/A')
+AND ei.`司龄_年_` IS NOT NULL
+) t
+GROUP BY t.`组织`
+ORDER BY avg_service_years DESC
+[4mLIMIT[0m","SELECT t.`组织`, AVG(t.`司龄_年_`) AS avg_service_years
+FROM (
+SELECT DISTINCT ei.`员工编号`, ei.`组织`, ei.`司龄_年_`
+FROM employee_info ei
+JOIN employee_change ec
+ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (
+(ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+OR (ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+)
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN
+('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ei.`组织` IS NOT NULL
+AND TRIM(ei.`组织`) <> ''
+AND TRIM(ei.`组织`) NOT IN ('未填写', '未知', '无', 'N/A')
+AND ei.`司龄_年_` IS NOT NULL
+) t
+GROUP BY t.`组织`
+ORDER BY avg_service_years DESC
+LIMIT"
+reconcile_hr_extra_014,当前各子公司30岁及以下员工占比是多少？,True,18,True,True,True,True,True,,"SELECT
+ei.`组织` AS 子公司,
+COUNT(CASE WHEN ei.`年龄` <= 30 THEN 1 END) * 100.0 / COUNT(*) AS `30岁及以下员工占比`
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (
+(ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+OR (ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+)
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN
+('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ei.`组织` IS NOT NULL
+AND TRIM(ei.`组织`) <> ''
+AND TRIM(ei.`组织`) NOT IN ('未填写', '未知', '无', 'N/A')
+AND ei.`年龄` IS NOT NULL
+GROUP BY ei.`组织`
+ORDER BY `30岁及以下员工占比`"
+reconcile_hr_extra_015,广州天极电子科技股份有限公司当前各部门人数排名前10是什么？,True,10,True,True,False,True,False,,"SELECT ec.`部门`, COUNT(DISTINCT ei.`员工编号`) AS `人数`
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ei.`组织` = '广州天极电子科技股份有限公司'
+AND ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ec.`部门` NOT IN ('未填写', '未知', '无', 'N/A')
+GROUP BY ec.`部门`
+ORDER BY `人数` DESC
+LIMIT 10;"
+reconcile_hr_extra_016,当前员工人数少于20人的子公司有哪些？,True,6,True,True,True,True,True,,"SELECT ei.`组织`
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '' OR ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ei.`组织` IS NOT NULL
+AND TRIM(ei.`组织`) <> ''
+AND TRIM(ei.`组织`) NOT IN ('未填写', '未知', '无', 'N/A')
+GROUP BY ei.`组织`
+HAVING COUNT(DISTINCT ei.`员工编号`) < 20;"
+reconcile_hr_extra_017,当前各子公司研发工程师人数和销售工程师人数分别是多少？,True,18,True,True,True,True,True,,"SELECT ei.`组织`,
+COUNT(DISTINCT CASE WHEN ec.`职位` LIKE '%研发工程师%' THEN ei.`员工编号` END) AS `研发工程师人数`,
+COUNT(DISTINCT CASE WHEN ec.`职位` LIKE '%销售工程师%' THEN ei.`员工编号` END) AS `销售工程师人数`
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '' OR ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ei.`组织` IS NOT NULL AND TRIM(ei.`组织`) <> '' AND TRIM(ei.`组织`) NOT IN ('未填写', '未知', '无', 'N/A')
+GROUP BY ei.`组织`;"
+reconcile_hr_extra_018,当前各子公司中高级职称员工人数排名是什么？,True,3,True,True,True,True,True,,"SELECT ei.`组织`, COUNT(DISTINCT ei.`员工编号`) AS employee_count
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '' OR ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ei.`组织` IS NOT NULL AND TRIM(ei.`组织`) <> '' AND TRIM(ei.`组织`) NOT IN ('未填写', '未知', '无', 'N/A')
+AND ei.`最高职称级别` IN ('副高级', '正高级')
+GROUP BY ei.`组织`
+ORDER BY employee_count DESC;"
+reconcile_hr_extra_019,当前电子信息工程专业员工按子公司分布是什么？,True,8,True,True,False,True,False,,"SELECT ei.`组织`, COUNT(DISTINCT ei.`员工编号`) AS employee_count
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND (ei.`最高专业` = '电子信息工程' OR ei.`最高专业` = '电子信息工程技术' OR ei.`最高专业` = '电子信息科学与技术')
+AND ei.`组织` IS NOT NULL
+AND TRIM(ei.`组织`) <> ''
+AND TRIM(ei.`组织`) NOT IN ('未填写', '未知', '无', 'N/A')
+GROUP BY ei.`组织`
+ORDER BY employee_count DESC;"
+reconcile_hr_extra_020,当前计算机科学与技术专业员工中研发工程师岗位有哪些人？,True,0,True,True,True,True,True,,"SELECT DISTINCT ei.`员工姓名`
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ei.`最高专业` = '计算机科学与技术'
+AND ec.`职位` = '研发工程师';"
+reconcile_hr_extra_021,当前专业为空或“无”的员工有多少人？,True,1,True,True,True,True,True,,"SELECT COUNT(DISTINCT ei.`员工编号`)
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND ((ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '') OR (ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> ''))
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND (ei.`最高专业` IS NULL OR TRIM(ei.`最高专业`) = '' OR TRIM(ei.`最高专业`) = '无');"
+reconcile_hr_extra_022,当前材料科学与工程专业员工的平均年龄是多少？,True,1,True,True,True,True,True,,"SELECT AVG(ei.`年龄`) AS avg_age
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (
+(ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+OR (ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+)
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN
+('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ei.`最高专业` = '材料科学与工程';"
+reconcile_hr_extra_023,当前各专业中副高级及以上职称员工人数排名前10是什么？,True,10,True,True,False,True,False,,"SELECT ei.`最高专业` AS 专业, COUNT(DISTINCT ei.`员工编号`) AS 人数
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ei.`最高职称级别` IN ('副高级', '正高级')
+AND ei.`最高专业` IS NOT NULL
+AND TRIM(ei.`最高专业`) <> ''
+AND TRIM(ei.`最高专业`) NOT IN ('未填写', '未知', '无', 'N/A')
+GROUP BY ei.`最高专业`
+ORDER BY 人数 DESC
+LIMIT 10;"
+reconcile_hr_extra_024,当前电子信息工程和通信工程专业分别有多少当前员工？,True,1,True,True,True,True,True,,"SELECT
+SUM(CASE WHEN ei.`最高专业` = '电子信息工程' THEN 1 ELSE 0 END) AS `电子信息工程人数`,
+SUM(CASE WHEN ei.`最高专业` = '通信工程' THEN 1 ELSE 0 END) AS `通信工程人数`
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (
+(ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+OR (ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+)
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN
+('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ei.`最高专业` IN ('电子信息工程', '通信工程');"
+reconcile_hr_extra_025,当前参与过SAP项目或SAP上线项目的员工有哪些？,True,7,True,True,True,True,True,,"SELECT DISTINCT ei.`员工编号`, ei.`员工姓名`
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (
+(ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+OR (ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+)
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN
+('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND (ec.`部门` LIKE '%SAP%' OR ec.`职位` LIKE '%SAP%' OR ec.`部门` LIKE '%上线%' OR ec.`职位` LIKE '%上线%');"
+reconcile_hr_extra_026,当前项目经历中项目名称为空或为“无”的记录涉及多少员工？,True,1,True,True,True,True,True,,"SELECT COUNT(DISTINCT we.`员工编号`)
+FROM work_experience we
+JOIN employee_info ei ON we.`员工编号` = ei.`员工编号`
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE we.`经历类型` = '项目经历'
+AND (we.`名称` IS NULL OR TRIM(we.`名称`) = '' OR TRIM(we.`名称`) = '无')
+AND ec.`结束日期` LIKE '2199%'
+AND (
+(ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+OR (ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+)
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止');"
+reconcile_hr_extra_027,当前参与过电容器高温电性能测试项目的员工所在部门和岗位是什么？,True,4,True,True,True,True,True,,"SELECT DISTINCT ec.`部门`, ec.`职位`
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+AND (ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND (ec.`部门` LIKE '%电性能测试%' OR ec.`部门` LIKE '%高温%' OR ec.`职位` LIKE '%电性能测试%' OR ec.`职位` LIKE '%高温%');"
+reconcile_hr_extra_028,当前有2020年以后结束的项目经历员工有多少人？,True,1,True,True,False,True,False,,"SELECT COUNT(DISTINCT ei.`员工编号`)
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+JOIN work_experience we ON we.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND we.`经历类型` = '项目经历'
+AND we.`结束时间` > '2020-12-31';"
+reconcile_hr_extra_029,当前各项目参与员工数排名前10是什么？,True,10,True,True,False,True,False,,"SELECT we.`名称` AS 项目名称, COUNT(DISTINCT ei.`员工编号`) AS 参与员工数
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+JOIN work_experience we ON we.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND we.`经历类型` = '项目经历'
+AND we.`名称` IS NOT NULL
+AND TRIM(we.`名称`) <> ''
+AND TRIM(we.`名称`) NOT IN ('未填写', '未知', '无', 'N/A')
+GROUP BY we.`名称`
+ORDER BY 参与员工数 DESC
+LIMIT 10;"
+reconcile_hr_extra_030,当前有项目经历但没有绩效记录的员工有多少人？,True,1,True,True,True,True,True,,"SELECT COUNT(DISTINCT ei.`员工编号`)
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+LEFT JOIN work_experience we ON we.`员工编号` = ei.`员工编号` AND we.`经历类型` = '项目经历'
+LEFT JOIN performance p ON p.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (
+(ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+OR (ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+)
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND we.`员工编号` IS NOT NULL
+AND p.`员工编号` IS NULL;"
+reconcile_hr_extra_031,2024年S卓越员工名单及所在子公司是什么？,True,53,True,True,True,True,True,,"SELECT DISTINCT ei.`员工姓名`, ei.`组织`
+FROM employee_info ei
+JOIN performance p ON ei.`员工编号` = p.`员工编号`
+WHERE p.`考核年份` = '2024年' AND p.`考核结果` = 'S卓越'
+AND ei.`员工编号` IN (
+SELECT DISTINCT ei2.`员工编号`
+FROM employee_info ei2
+JOIN employee_change ec ON ei2.`员工编号` = ec.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (
+(ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+OR (ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+)
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei2.`用工类型`), ''), '') NOT IN
+('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+);"
+reconcile_hr_extra_032,2024年绩效A优秀且2023年也是A优秀的当前员工有多少人？,True,1,True,True,False,True,False,,"SELECT COUNT(DISTINCT ei.`员工编号`)
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+JOIN performance p2024 ON p2024.`员工编号` = ei.`员工编号`
+JOIN performance p2023 ON p2023.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND p2024.`考核年份` = '2024年'
+AND p2024.`考核结果` = 'A优秀'
+AND p2023.`考核年份` = '2023年'
+AND p2023.`考核结果` = 'A优秀';"
+reconcile_hr_extra_033,当前员工2024年绩效结果按子公司分布是什么？,True,6,True,True,True,True,True,,"SELECT ei.`组织`, p.`考核结果`, COUNT(DISTINCT ei.`员工编号`) AS count
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+JOIN performance p ON p.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '' OR ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND p.`考核年份` = '2024年'
+AND ei.`组织` IS NOT NULL
+AND TRIM(ei.`组织`) <> ''
+AND TRIM(ei.`组织`) NOT IN ('未填写', '未知', '无', 'N/A')
+AND p.`考核结果` IS NOT NULL
+AND TRIM(p.`考核结果`) <> ''
+GROUP BY ei.`组织`, p.`考核结果`"
+reconcile_hr_extra_034,2024年绩效D待改进员工当前岗位分布是什么？,True,5,True,True,True,True,True,,"SELECT ec.`职位`, COUNT(DISTINCT ei.`员工编号`) AS count
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+JOIN performance p ON p.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND p.`考核年份` = '2024年'
+AND p.`考核结果` = 'D待改进'
+AND ec.`职位` IS NOT NULL
+AND TRIM(ec.`职位`) <> ''
+AND TRIM(ec.`职位`) NOT IN ('未填写', '未知', '无', 'N/A')
+GROUP BY ec.`职位`
+ORDER BY count DESC;"
+reconcile_hr_extra_035,2023年到2024年绩效从A优秀下降到C合格或以下的当前员工有哪些？,False,0,True,True,True,True,True,Generated SQL appears incomplete. Regenerate a complete single SELECT statement.,"SELECT DISTINCT ei.`员工编号`, ei.`员工姓名`
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+JOIN performance p2023 ON p2023.`员工编号` = ei.`员工编号` AND p2023.`考核年份` = '2023年'
+JOIN performance p2024 ON p2024.`员工编号` = ei.`员工编号` AND p2024.`考核年份` = '2024年'
+WHERE ec.`结束日期` LIKE '2199%'
+AND (
+(ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+OR (ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+)
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN
+('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND p2023.`考核结果` = 'A优秀'
+AND p2024.`考核结果` IN ('C合格', '"
+reconcile_hr_extra_036,当前没有2024年绩效记录的员工有多少人？,True,1,True,True,True,True,True,,"SELECT COUNT(DISTINCT ei.`员工编号`)
+FROM employee_info ei
+JOIN employee_change ec ON ec.`员工编号` = ei.`员工编号`
+WHERE ec.`结束日期` LIKE '2199%'
+AND (
+(ec.`部门` IS NOT NULL AND TRIM(ec.`部门`) <> '')
+OR (ec.`职位` IS NOT NULL AND TRIM(ec.`职位`) <> '')
+)
+AND COALESCE(NULLIF(TRIM(ec.`用工关系状态`), ''), NULLIF(TRIM(ei.`用工类型`), ''), '') NOT IN ('离职', '辞职', '辞退', '退休', '实习终止', '返聘终止')
+AND ei.`员工编号` NOT IN (
+SELECT DISTINCT p.`员工编号`
+FROM performance p
+WHERE p.`考核年份` = '2024年'
+)"

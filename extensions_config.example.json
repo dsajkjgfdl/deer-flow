@@ -27,6 +27,40 @@
       ],
       "env": {},
       "description": "PostgreSQL database access"
+    },
+    "hr-graphrag-qa": {
+      "enabled": false,
+      "type": "stdio",
+      "command": "D:/study/my-mcp/graphrag-mcp/.venv/Scripts/python.exe",
+      "args": [
+        "D:/python_project/deer-flow/scripts/run_graphrag_mcp.py"
+      ],
+      "env": {
+        "GRAPHRAG_MCP_REPO": "D:/study/my-mcp/graphrag-mcp",
+        "GRAPHRAG_DATA_ROOT": "D:/study/my-mcp/graphrag-data/hr_agent",
+        "ALIBABA_API_KEY": "$ALIBABA_API_KEY"
+      },
+      "description": "Fixed HR GraphRAG QA MCP server"
+    },
+    "text2cypher": {
+      "enabled": false,
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "D:/python_project/deer-flow/scripts/run_text2cypher_mcp.py"
+      ],
+      "env": {
+        "TEXT2CYPHER_REPO": "D:/study/my-mcp/text2cypher",
+        "TEXT2CYPHER_PROFILE_PATH": "D:/python_project/deer-flow/backend/.deer-flow/agents/hr-boss-agent/text2cypher-profile.md",
+        "TEXT2CYPHER_NEO4J_URI": "bolt://localhost:7687",
+        "TEXT2CYPHER_NEO4J_USERNAME": "neo4j",
+        "TEXT2CYPHER_NEO4J_PASSWORD": "neo4j",
+        "TEXT2CYPHER_NEO4J_DATABASE": "neo4j",
+        "TEXT2CYPHER_OPENAI_API_KEY": "$TEXT2CYPHER_OPENAI_API_KEY",
+        "TEXT2CYPHER_OPENAI_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "TEXT2CYPHER_OPENAI_MODEL": "qwen3-max"
+      },
+      "description": "Local Text2Cypher engine via MCP"
     }
   },
   "skills": {}

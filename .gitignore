@@ -38,6 +38,9 @@ coverage/
 .deer-flow/
 .claude/
 skills/custom/*
+!skills/custom/hr-boss/
+skills/custom/hr-boss/*
+!skills/custom/hr-boss/SKILL.md
 logs/
 log/
 debug.log
@@ -60,6 +63,16 @@ config.yaml.bak
 /frontend/playwright-report/
 .gstack/
 .worktrees
+
+!backend/.deer-flow/
+backend/.deer-flow/*
+!backend/.deer-flow/agents/
+backend/.deer-flow/agents/*
+!backend/.deer-flow/agents/hr-boss-agent/
+backend/.deer-flow/agents/hr-boss-agent/*
+!backend/.deer-flow/agents/hr-boss-agent/config.yaml
+!backend/.deer-flow/agents/hr-boss-agent/SOUL.md
+!backend/.deer-flow/agents/hr-boss-agent/text2cypher-profile.md
 
 .understand*/
 
