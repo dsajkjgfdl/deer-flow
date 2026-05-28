@@ -87,11 +87,13 @@ class TestAgentConfig:
 
         cfg = AgentConfig(
             name="code-reviewer",
+            display_name="代码审查智能体",
             description="Specialized for code review",
             model="deepseek-v3",
             tool_groups=["file:read", "bash"],
         )
         assert cfg.name == "code-reviewer"
+        assert cfg.display_name == "代码审查智能体"
         assert cfg.model == "deepseek-v3"
         assert cfg.tool_groups == ["file:read", "bash"]
 
@@ -474,6 +476,24 @@ class TestAgentsAPI:
         agents = response.json()["agents"]
         soul_agent = next(a for a in agents if a["name"] == "soul-agent")
         assert soul_agent["soul"] == "My soul content"
+
+    def test_list_agents_includes_display_name_from_config(self, agent_client):
+        _write_agent(
+            agent_client._tmp_path,  # type: ignore[attr-defined]
+            "hr-boss-agent",
+            {
+                "name": "hr-boss-agent",
+                "display_name": "人岗匹配智能体",
+                "description": "HR agent",
+            },
+        )
+
+        response = agent_client.get("/api/agents")
+
+        assert response.status_code == 200
+        agents = response.json()["agents"]
+        hr_agent = next(a for a in agents if a["name"] == "hr-boss-agent")
+        assert hr_agent["display_name"] == "人岗匹配智能体"
 
     def test_get_agent(self, agent_client):
         agent_client.post("/api/agents", json={"name": "test-agent", "soul": "Hello world"})

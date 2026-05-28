@@ -23,6 +23,7 @@ class AgentResponse(BaseModel):
     """Response model for a custom agent."""
 
     name: str = Field(..., description="Agent name (hyphen-case)")
+    display_name: str | None = Field(default=None, description="Human-readable agent name")
     description: str = Field(default="", description="Agent description")
     model: str | None = Field(default=None, description="Optional model override")
     tool_groups: list[str] | None = Field(default=None, description="Optional tool group whitelist")
@@ -95,6 +96,7 @@ def _agent_config_to_response(agent_cfg: AgentConfig, include_soul: bool = False
 
     return AgentResponse(
         name=agent_cfg.name,
+        display_name=agent_cfg.display_name,
         description=agent_cfg.description,
         model=agent_cfg.model,
         tool_groups=agent_cfg.tool_groups,
