@@ -1,5 +1,0 @@
-{"id":"term_001","category":"organization_alias","question":"火炬电子现在有多少员工？","expected":"应把火炬电子映射为福建火炬电子科技股份有限公司，并按当前员工口径查询。"}
-{"id":"term_002","category":"title_alias","question":"高工现在有多少人？","expected":"应识别高工为高级工程师职称，不应按岗位查询。"}
-{"id":"term_003","category":"department_ambiguous","question":"技术部现在有多少人？","expected":"如果存在多个技术相关部门，应追问确认，不应直接猜。"}
-{"id":"term_004","category":"unknown_value","question":"星火事业部现在有多少人？","expected":"如果图谱没有该部门候选，应说明未命中或追问，不应编造部门。"}
-{"id":"term_005","category":"organization_position_compound","question":"广州天极电子科技股份有限公司销售助理岗位有哪些员工？","expected":"应拆分为组织“广州天极电子科技股份有限公司”和岗位“销售助理”，不要把整段公司名加岗位识别成一个岗位。"}
