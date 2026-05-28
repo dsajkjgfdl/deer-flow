@@ -108,6 +108,72 @@ def test_run_turn_ignores_replayed_message_ids_between_turns():
     assert seen_message_ids == {"old-ai", "old-tool", "new-ai"}
 
 
+def test_run_turn_fetches_text2cypher_debug_cypher_when_fast_result_is_slim():
+    class FakeClient:
+        def stream(self, _message, *, thread_id):
+            assert thread_id == "thread-1"
+            slim_result = {
+                "status": "success",
+                "answerable": True,
+                "term_resolution": {
+                    "question": "福建火炬电子科技股份有限公司IT部有多少人?",
+                    "needs_clarification": False,
+                    "mappings": [],
+                },
+                "execution": {"columns": ["employee_count"], "records": [{"employee_count": 1}]},
+            }
+            return iter(
+                [
+                    SimpleNamespace(
+                        type="messages-tuple",
+                        data={
+                            "type": "ai",
+                            "id": "tool-ai",
+                            "content": "",
+                            "tool_calls": [{"name": "text2cypher_answer_question", "args": {"question": "q"}}],
+                        },
+                    ),
+                    SimpleNamespace(
+                        type="messages-tuple",
+                        data={
+                            "type": "tool",
+                            "id": "tool-1",
+                            "name": "text2cypher_answer_question",
+                            "content": slim_result,
+                        },
+                    ),
+                    SimpleNamespace(type="messages-tuple", data={"type": "ai", "id": "final", "content": "1人"}),
+                ]
+            )
+
+    class FakeDebugRunner:
+        def __init__(self):
+            self.questions = []
+
+        def answer_question(self, question):
+            self.questions.append(question)
+            return {
+                "generation": {"generated_cypher": "MATCH (e:Employee) RETURN count(e)"},
+                "execution": {"normalized_cypher": "MATCH (e:Employee) RETURN count(e)"},
+            }
+
+    debug_runner = FakeDebugRunner()
+
+    turn = run_hr_boss_eval.run_turn(
+        record={"id": "case-1"},
+        client=FakeClient(),
+        message="福建的那家",
+        thread_id="thread-1",
+        rnd=1,
+        turn_num=2,
+        text2cypher_debug_runner=debug_runner,
+    )
+
+    assert turn["answer"] == "1人"
+    assert turn["generated_cypher"] == "MATCH (e:Employee) RETURN count(e)"
+    assert debug_runner.questions == ["福建火炬电子科技股份有限公司IT部有多少人?"]
+
+
 def test_xiyan_runner_supports_legacy_mcp_cache_signature(monkeypatch):
     tool = SimpleNamespace(name=XIYAN_TEXT2SQL_ANSWER_TOOL)
 

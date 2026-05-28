@@ -24,7 +24,7 @@ description: 当面向领导的 HR 问题需要在 Text2Cypher 和 GraphRAG 四�
 
 ## Text2Cypher 双路径
 
-快路径适用于普通领导问答：调用 `text2cypher_answer_question`，拿到精确答案后转写成面向领导的结论。
+快路径适用于普通领导问答：调用 `text2cypher_answer_question`，拿到精确答案后转写成面向领导的结论。普通领导问答不得请求或依赖调试字段；只有用户明确要求调试、评测脚本需要记录查询，或排障时，才允许请求包含 Cypher、校验、schema、raw output 的调试结果。
 
 ## 具体人员查询
 
@@ -57,7 +57,7 @@ Text2Cypher 的 `answer_question` 会默认做字段值纠错转换，并在工�
 
 当 `answer_question` 顶层返回成功且 `term_resolution.needs_clarification=false` 时，即使 `unresolved_terms` 非空，也不要把它改写成“需要确认口径”。这只表示字段值纠错没有匹配到单个标准实体，不等于业务口径歧义。最终回答应直接给出工具返回的统计结果，并把实际筛选口径作为说明；不要再询问“该口径是否符合需求”。
 
-处理 `text2cypher_answer_question` 结果时，必须先看顶层契约字段，再看生成、校验或执行细节。只要 `answer_question` 返回的顶层 `status` 不是 `success`，或 `answerable=false`，最终回答就必须按失败、限制或追问处理；不得引用同一工具结果里的 `generated_cypher`、`execution`、records 或 execution summary 推导结论。即使该结果里附带了已执行的 Cypher 或数字，也只能作为调试线索，不能作为领导答案。
+处理 `text2cypher_answer_question` 结果时，必须先看顶层契约字段，再看执行结果中的业务列和业务记录。只要 `answer_question` 返回的顶层 `status` 不是 `success`，或 `answerable=false`，最终回答就必须按失败、限制或追问处理；不得引用同一工具结果里的 `generated_cypher`、`normalized_cypher`、`validation`、`schema_text`、`raw_output` 或 execution summary 推导结论。即使该结果里附带了已执行的 Cypher，也只能作为调试线索，不能作为领导答案。
 
 Text2Cypher 的 `answer_question` 也可能返回结构化失败契约字段：`status`、`answerable`、`should_retry`、`limitation`。如果 `status` 是 `needs_clarification`、`insufficient_data`、`no_reliable_evidence` 或 `query_failed`，并且 `should_retry=false`，应立即停止低层工具链重试，按 `limitation` 给出领导可理解的限制说明或追问问题。不要为了“再试试”继续调用 `generate_cypher`、`validate_cypher`、`execute_cypher`。只有 `should_retry=true` 或用户明确要求调试查询时，才允许进入低层路径。
 
@@ -100,7 +100,7 @@ Text2Cypher 的具体业务口径以 Text2Cypher MCP 加载的 HR Boss profile �
 
 转写工具结果时，必须贴合工具实际查询口径，不得添加工具结果未返回的限定词；例如工具只按教育经历统计时，不要擅自改写为“最高学历”或“最高毕业院校”。
 
-当工具结果包含 Cypher 时，最终口径说明必须贴合 Cypher 中实际出现的关系和字段。看到 `HAS_EDUCATION` 只能表述为“教育经历”或“毕业院校记录”；只有 Cypher 明确包含最高学历字段、最高学历关系或相关排序筛选时，才可以表述为“最高学历”或“最高毕业院校”。
+当工具结果包含 Cypher、节点名、关系名或字段名时，最终回答只能把它们翻译成业务自然语言，不得在最终回答中原样输出任何图谱技术标识、字段路径、代码片段或反引号包裹的技术名。常见翻译包括：`CURRENTLY_IN_DEPARTMENT` 表述为“当前所属部门”，`CURRENTLY_IN_POSITION` 表述为“当前任职岗位”，`Employee.current_org_name` 表述为“当前所属组织”，`BELONGS_TO_ORGANIZATION` 表述为“组织归属”，`HAS_EDUCATION` 表述为“教育经历”或“毕业院校记录”，`Title.title_level` 表述为“职称级别”。只有 Cypher 明确包含最高学历字段、最高学历关系或相关排序筛选时，才可以表述为“最高学历”或“最高毕业院校”。
 
 当证据不足、字段口径不清、结果可能不完整时，必须明确说明，不得猜测。
 

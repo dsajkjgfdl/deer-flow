@@ -18,9 +18,11 @@ DATA_DIR = REPO_ROOT / "docs" / "evaluation" / "hr-boss"
 DEFAULT_TRACKS = ("text2cypher.strict", "graphrag.logic")
 TRACK_CHOICES = DEFAULT_TRACKS + ("boss.e2e", "term_resolution.strict")
 DEFAULT_CUSTOM_TRACK_MCP_SERVERS = ["text2cypher", "hr-graphrag-qa"]
+TEXT2CYPHER_SERVER = "text2cypher"
+TEXT2CYPHER_ANSWER_TOOL = "text2cypher_answer_question"
 XIYAN_TEXT2SQL_SERVER = "xiyan-text2sql"
 XIYAN_TEXT2SQL_ANSWER_TOOL = f"{XIYAN_TEXT2SQL_SERVER}_answer_question"
-TEXT2CYPHER_FAST_ROUTE = ["text2cypher_answer_question"]
+TEXT2CYPHER_FAST_ROUTE = [TEXT2CYPHER_ANSWER_TOOL]
 TEXT2CYPHER_TERM_ROUTE = ["text2cypher_resolve_terms"]
 TEXT2CYPHER_LOW_LEVEL_ROUTE = [
     "text2cypher_prepare_schema",
@@ -551,6 +553,56 @@ def preload_mcp_eval_tools(*, log: LogFn | None) -> None:
     emit(log, f"preloaded_mcp_tools={len(tools)}")
 
 
+class Text2CypherDebugMcpRunner:
+    def __init__(
+        self,
+        *,
+        max_rows: int = 100,
+        auto_repair: bool = True,
+        tool_name: str = TEXT2CYPHER_ANSWER_TOOL,
+    ) -> None:
+        self.max_rows = max_rows
+        self.auto_repair = auto_repair
+        self.tool_name = tool_name
+        self._tool: Any | None = None
+
+    def answer_question(self, question: str) -> dict[str, Any]:
+        tool = self._get_tool()
+        args = {
+            "question": question,
+            "max_rows": self.max_rows,
+            "auto_repair": self.auto_repair,
+            "include_debug": True,
+        }
+        if hasattr(tool, "invoke"):
+            return unwrap_mcp_text_payload(tool.invoke(args))
+        if getattr(tool, "func", None) is not None:
+            return unwrap_mcp_text_payload(tool.func(**args))
+        if getattr(tool, "coroutine", None) is not None:
+            import asyncio
+
+            return unwrap_mcp_text_payload(asyncio.run(tool.coroutine(**args)))
+        raise RuntimeError(f"Text2Cypher MCP tool is not invokable: {self.tool_name}")
+
+    def _get_tool(self) -> Any:
+        if self._tool is not None:
+            return self._tool
+
+        tools = get_cached_mcp_tools_compat(server_names=[TEXT2CYPHER_SERVER])
+        for tool in tools:
+            if getattr(tool, "name", "") == self.tool_name:
+                self._tool = tool
+                return tool
+
+        available = sorted(
+            getattr(tool, "name", "")
+            for tool in tools
+            if str(getattr(tool, "name", "")).startswith("text2cypher_")
+        )
+        available_text = ", ".join(available) if available else "none"
+        raise RuntimeError(f"Missing Text2Cypher MCP tool: {self.tool_name}; available Text2Cypher tools: {available_text}")
+
+
 class XiYanSqlMcpRunner:
     def __init__(
         self,
@@ -728,6 +780,19 @@ def collect_xiyan_sql_question(job: tuple[Future[dict[str, Any]], ThreadPoolExec
         executor.shutdown(wait=True)
 
 
+def select_text2cypher_debug_question(record: dict[str, Any], message: str, term_resolution: dict[str, Any] | None) -> str:
+    if isinstance(term_resolution, dict):
+        question = term_resolution.get("question") or term_resolution.get("normalized_question")
+        if isinstance(question, str) and question.strip():
+            return question.strip()
+
+    record_question = record.get("question")
+    if isinstance(record_question, str) and record_question.strip():
+        return record_question.strip()
+
+    return message
+
+
 def run_turn(
     *,
     record: dict[str, Any],
@@ -738,6 +803,7 @@ def run_turn(
     turn_num: int,
     log: LogFn | None = None,
     seen_message_ids: set[str] | None = None,
+    text2cypher_debug_runner: Any | None = None,
 ) -> dict[str, Any]:
     answer = ""
     clarification_answer = ""
@@ -862,16 +928,30 @@ def run_turn(
     if seen_message_ids is not None:
         seen_message_ids.update(observed_message_ids)
 
+    term_resolution = select_term_resolution(term_resolution_trace)
+    generated_cypher = select_generated_cypher(cypher_trace)
+    if generated_cypher is None and text2cypher_debug_runner is not None and TEXT2CYPHER_ANSWER_TOOL in tool_calls:
+        debug_question = select_text2cypher_debug_question(record, message, term_resolution)
+        try:
+            debug_payload = text2cypher_debug_runner.answer_question(debug_question)
+            debug_trace = extract_cypher_trace(TEXT2CYPHER_ANSWER_TOOL, "debug_tool_result", debug_payload)
+            generated_cypher = select_generated_cypher(debug_trace)
+            if generated_cypher:
+                emit(log, f"case {record['id']} r{rnd} captured_debug_cypher chars={len(generated_cypher)}")
+            else:
+                emit(log, f"case {record['id']} r{rnd} debug_cypher_missing")
+        except Exception as exc:  # pragma: no cover - defensive path for live MCP failures.
+            emit(log, f"case {record['id']} r{rnd} debug_cypher_error={type(exc).__name__}: {exc}")
+
     turn_entry = {
         "turn": turn_num,
         "user_message": message,
         "answer": answer,
-        "generated_cypher": select_generated_cypher(cypher_trace),
+        "generated_cypher": generated_cypher,
         "tool_calls": tool_calls,
         "error": error,
         "event_count": event_count,
     }
-    term_resolution = select_term_resolution(term_resolution_trace)
     if term_resolution is not None:
         turn_entry["term_resolution"] = term_resolution
     return turn_entry
@@ -887,6 +967,7 @@ def run_records(
     max_turns: int = 3,
     simulator: Any | None = None,
     xiyan_sql_runner: Any | None = None,
+    text2cypher_debug_runner: Any | None = None,
     log: LogFn | None = None,
     on_results_update: ResultsUpdateFn | None = None,
 ) -> list[dict[str, Any]]:
@@ -939,6 +1020,7 @@ def run_records(
                     turn_num=turn_num,
                     log=log,
                     seen_message_ids=seen_message_ids,
+                    text2cypher_debug_runner=text2cypher_debug_runner,
                 )
                 turns.append(turn_entry)
                 if conversation_mode == "single" or turn_entry.get("error") or turn_num >= turn_limit:
@@ -1354,6 +1436,9 @@ def main() -> int:
             xiyan_sql_runner = XiYanSqlMcpRunner()
             emit(log, f"xiyan_sql_runner created tool={XIYAN_TEXT2SQL_ANSWER_TOOL} database_id=mysql")
 
+        text2cypher_debug_runner = Text2CypherDebugMcpRunner()
+        emit(log, f"text2cypher_debug_runner created tool={TEXT2CYPHER_ANSWER_TOOL} include_debug=True")
+
         def write_progress(current_results: list[dict[str, Any]]) -> None:
             emit(log, f"incremental write results_completed={len(current_results)} jsonl={output_jsonl}")
             write_jsonl(current_results, output_jsonl)
@@ -1369,6 +1454,7 @@ def main() -> int:
             max_turns=args.max_turns,
             simulator=simulator,
             xiyan_sql_runner=xiyan_sql_runner,
+            text2cypher_debug_runner=text2cypher_debug_runner,
             log=log,
             on_results_update=write_progress,
         )
