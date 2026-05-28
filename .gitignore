@@ -77,3 +77,6 @@ backend/.deer-flow/agents/hr-boss-agent/*
 .understand*/
 
 my_doc/
+
+docs/
+tmp_*
