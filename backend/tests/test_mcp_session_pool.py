@@ -407,3 +407,6 @@ def test_session_pool_tool_sync_wrapper_path_is_safe():
         wrapped.func(url="https://example.com")
 
     mock_session.call_tool.assert_called_once_with("navigate", {"url": "https://example.com"})
+    mock_cm.__aexit__.assert_awaited_once()
+    pool = get_session_pool()
+    assert ("playwright", "default") not in pool._entries

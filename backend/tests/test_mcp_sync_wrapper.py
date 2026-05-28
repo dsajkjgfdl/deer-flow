@@ -1,6 +1,6 @@
 import asyncio
 import contextvars
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from langchain_core.runnables import RunnableConfig
@@ -51,6 +51,45 @@ def test_mcp_tool_sync_wrapper_generation():
         # Verify it works (sync call)
         result = patched_tool.func(x=42)
         assert result == "result: 42"
+
+
+def test_mcp_tools_are_discovered_one_server_at_a_time():
+    """Avoid adapter-level concurrent stdio discovery sessions."""
+
+    async def mock_coro(x: int):
+        return f"result: {x}"
+
+    first_tool = StructuredTool(
+        name="first_tool",
+        description="first",
+        args_schema=MockArgs,
+        func=None,
+        coroutine=mock_coro,
+    )
+    second_tool = StructuredTool(
+        name="second_tool",
+        description="second",
+        args_schema=MockArgs,
+        func=None,
+        coroutine=mock_coro,
+    )
+
+    mock_client_instance = MagicMock()
+    mock_client_instance.get_tools = AsyncMock(side_effect=[[first_tool], [second_tool]])
+
+    with (
+        patch("langchain_mcp_adapters.client.MultiServerMCPClient", return_value=mock_client_instance),
+        patch("deerflow.config.extensions_config.ExtensionsConfig.from_file"),
+        patch("deerflow.mcp.tools.build_servers_config", return_value={"first": {}, "second": {}}),
+        patch("deerflow.mcp.tools.get_initial_oauth_headers", new_callable=AsyncMock, return_value={}),
+    ):
+        tools = asyncio.run(get_mcp_tools())
+
+    assert [tool.name for tool in tools] == ["first_tool", "second_tool"]
+    assert mock_client_instance.get_tools.await_args_list == [
+        call(server_name="first"),
+        call(server_name="second"),
+    ]
 
 
 def test_mcp_tool_sync_wrapper_in_running_loop():

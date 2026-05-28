@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import inspect
 import json
 import os
 import re
@@ -510,6 +511,46 @@ def select_records(records: list[dict[str, Any]], ids: set[str] | None, limit: i
     return selected
 
 
+def get_cached_mcp_tools_compat(*, server_names: list[str] | None = None) -> list[Any]:
+    from deerflow.mcp.cache import get_cached_mcp_tools
+
+    if server_names is not None:
+        parameters = inspect.signature(get_cached_mcp_tools).parameters
+        supports_server_names = "server_names" in parameters or any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+        )
+        if supports_server_names:
+            return get_cached_mcp_tools(server_names=server_names)
+
+    return get_cached_mcp_tools()
+
+
+def cleanup_mcp_eval_resources(
+    restricted_mcp_temp_dir: tempfile.TemporaryDirectory[str] | None,
+    *,
+    log: LogFn | None,
+) -> None:
+    try:
+        from deerflow.mcp.cache import reset_mcp_tools_cache
+
+        reset_mcp_tools_cache()
+        emit(log, "mcp resources cleaned up")
+    except Exception as exc:  # pragma: no cover - defensive cleanup path.
+        emit(log, f"mcp cleanup failed: {type(exc).__name__}: {exc}")
+
+    if restricted_mcp_temp_dir is not None:
+        try:
+            restricted_mcp_temp_dir.cleanup()
+            emit(log, "restricted mcp temp dir cleaned up")
+        except Exception as exc:  # pragma: no cover - defensive cleanup path.
+            emit(log, f"restricted mcp temp dir cleanup failed: {type(exc).__name__}: {exc}")
+
+
+def preload_mcp_eval_tools(*, log: LogFn | None) -> None:
+    tools = get_cached_mcp_tools_compat()
+    emit(log, f"preloaded_mcp_tools={len(tools)}")
+
+
 class XiYanSqlMcpRunner:
     def __init__(
         self,
@@ -547,9 +588,7 @@ class XiYanSqlMcpRunner:
         if self._tool is not None:
             return self._tool
 
-        from deerflow.mcp.cache import get_cached_mcp_tools
-
-        tools = get_cached_mcp_tools(server_names=[XIYAN_TEXT2SQL_SERVER])
+        tools = get_cached_mcp_tools_compat(server_names=[XIYAN_TEXT2SQL_SERVER])
         for tool in tools:
             if getattr(tool, "name", "") == self.tool_name:
                 self._tool = tool
@@ -698,8 +737,16 @@ def run_turn(
     rnd: int,
     turn_num: int,
     log: LogFn | None = None,
+    seen_message_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     answer = ""
+    clarification_answer = ""
+    ai_text_by_id: dict[str, str] = {}
+    ai_text_order: list[str] = []
+    ai_ids_with_tool_calls: set[str] = set()
+    hidden_ai_ids: set[str] = set()
+    prior_message_ids = set(seen_message_ids or ())
+    observed_message_ids: set[str] = set()
     tool_calls: list[str] = []
     cypher_trace: list[dict[str, str]] = []
     term_resolution_trace: list[dict[str, Any]] = []
@@ -731,7 +778,18 @@ def run_turn(
             if event.type != "messages-tuple":
                 continue
 
+            event_data = event.data
+            raw_message_id = event_data.get("id")
+            message_id = str(raw_message_id) if raw_message_id else None
+            if message_id and message_id in prior_message_ids:
+                continue
+            if message_id:
+                observed_message_ids.add(message_id)
+
+            ai_message_key = message_id or "__default_ai__"
+
             for call in event.data.get("tool_calls", []) or []:
+                ai_ids_with_tool_calls.add(ai_message_key)
                 name = call.get("name")
                 if name:
                     tool_calls.append(name)
@@ -739,20 +797,20 @@ def run_turn(
                     if name == "ask_clarification":
                         clarification_text = _extract_clarification_text(args_payload)
                         if clarification_text:
-                            answer = clarification_text
-                            emit(log, f"case {record['id']} r{rnd} clarification_answer chars={len(answer)}")
+                            clarification_answer = clarification_text
+                            emit(log, f"case {record['id']} r{rnd} clarification_answer chars={len(clarification_answer)}")
                     cypher_trace.extend(extract_cypher_trace(name, "tool_args", args_payload))
                     term_resolution_trace.extend(extract_term_resolution_trace(name, "tool_args", args_payload))
                     emit(log, f"case {record['id']} r{rnd} tool_call={name}")
 
-            if event.data.get("type") == "tool":
-                tool_name = event.data.get("name")
+            if event_data.get("type") == "tool":
+                tool_name = event_data.get("name")
                 if tool_name == "ask_clarification":
-                    clarification_text = _message_content_text(event.data.get("content", "")).strip()
+                    clarification_text = _message_content_text(event_data.get("content", "")).strip()
                     if clarification_text:
-                        answer = clarification_text
-                        emit(log, f"case {record['id']} r{rnd} clarification_answer chars={len(answer)}")
-                payload = parse_tool_payload(event.data.get("content", ""))
+                        clarification_answer = clarification_text
+                        emit(log, f"case {record['id']} r{rnd} clarification_answer chars={len(clarification_answer)}")
+                payload = parse_tool_payload(event_data.get("content", ""))
                 extracted = extract_cypher_trace(tool_name, "tool_result", payload)
                 cypher_trace.extend(extracted)
                 term_resolution_extracted = extract_term_resolution_trace(tool_name, "tool_result", payload)
@@ -766,12 +824,43 @@ def run_turn(
                         f"tool={tool_name} count={len(term_resolution_extracted)}",
                     )
 
-            if event.data.get("type") == "ai" and event.data.get("content"):
-                answer = event.data["content"]
-                emit(log, f"case {record['id']} r{rnd} answer_chunk chars={len(answer)}")
+            if event_data.get("type") == "ai" and event_data.get("content"):
+                chunk = _message_content_text(event_data["content"])
+                if ai_message_key not in ai_text_by_id:
+                    ai_text_order.append(ai_message_key)
+                    ai_text_by_id[ai_message_key] = ""
+                ai_text_by_id[ai_message_key] += chunk
+
+                additional_kwargs = event_data.get("additional_kwargs") or {}
+                message_name = str(event_data.get("name") or "")
+                if (
+                    additional_kwargs.get("hide_from_ui") is True
+                    or message_name in {"summary", "loop_warning", "todo_reminder", "todo_completion_reminder"}
+                    or ai_text_by_id[ai_message_key].lstrip().startswith("## SESSION INTENT")
+                ):
+                    hidden_ai_ids.add(ai_message_key)
+
+                emit(
+                    log,
+                    f"case {record['id']} r{rnd} answer_chunk id={ai_message_key} "
+                    f"chars={len(chunk)} total_chars={len(ai_text_by_id[ai_message_key])}",
+                )
     except Exception as exc:  # pragma: no cover - exercised manually against live services.
         error = f"{type(exc).__name__}: {exc}"
         emit(log, f"case {record['id']} r{rnd} error={error}")
+
+    for ai_message_key in reversed(ai_text_order):
+        if ai_message_key in ai_ids_with_tool_calls or ai_message_key in hidden_ai_ids:
+            continue
+        candidate = ai_text_by_id.get(ai_message_key, "")
+        if candidate:
+            answer = candidate
+            break
+    if not answer:
+        answer = clarification_answer
+
+    if seen_message_ids is not None:
+        seen_message_ids.update(observed_message_ids)
 
     turn_entry = {
         "turn": turn_num,
@@ -820,6 +909,7 @@ def run_records(
             turns: list[dict[str, Any]] = []
             simulator_entries: list[dict[str, Any]] = []
             simulator_error = None
+            seen_message_ids: set[str] = set()
 
             emit(
                 log,
@@ -848,6 +938,7 @@ def run_records(
                     rnd=rnd,
                     turn_num=turn_num,
                     log=log,
+                    seen_message_ids=seen_message_ids,
                 )
                 turns.append(turn_entry)
                 if conversation_mode == "single" or turn_entry.get("error") or turn_num >= turn_limit:
@@ -1237,58 +1328,61 @@ def main() -> int:
         include_xiyan_sql=args.run_xiyan_sql,
     )
 
-    emit(log, "importing DeerFlowClient")
-    from deerflow.client import DeerFlowClient
+    try:
+        preload_mcp_eval_tools(log=log)
 
-    emit(log, "creating DeerFlowClient agent_name=hr-boss-agent")
-    client = DeerFlowClient(
-        agent_name="hr-boss-agent",
-        thinking_enabled=args.thinking_enabled,
-        model_name=args.model_name,
-    )
-    emit(log, "client created")
+        emit(log, "importing DeerFlowClient")
+        from deerflow.client import DeerFlowClient
 
-    simulator = None
-    if args.conversation_mode == "simulate":
-        simulator_model_name = args.simulator_model_name or args.model_name
-        emit(log, f"creating BossUserSimulator model={simulator_model_name or 'default'}")
-        simulator = BossUserSimulator(model_name=simulator_model_name, thinking_enabled=args.thinking_enabled)
-        emit(log, "simulator created")
+        emit(log, "creating DeerFlowClient agent_name=hr-boss-agent")
+        client = DeerFlowClient(
+            agent_name="hr-boss-agent",
+            thinking_enabled=args.thinking_enabled,
+            model_name=args.model_name,
+        )
+        emit(log, "client created")
 
-    xiyan_sql_runner = None
-    if args.run_xiyan_sql:
-        xiyan_sql_runner = XiYanSqlMcpRunner()
-        emit(log, f"xiyan_sql_runner created tool={XIYAN_TEXT2SQL_ANSWER_TOOL} database_id=mysql")
+        simulator = None
+        if args.conversation_mode == "simulate":
+            simulator_model_name = args.simulator_model_name or args.model_name
+            emit(log, f"creating BossUserSimulator model={simulator_model_name or 'default'}")
+            simulator = BossUserSimulator(model_name=simulator_model_name, thinking_enabled=args.thinking_enabled)
+            emit(log, "simulator created")
 
-    def write_progress(current_results: list[dict[str, Any]]) -> None:
-        emit(log, f"incremental write results_completed={len(current_results)} jsonl={output_jsonl}")
-        write_jsonl(current_results, output_jsonl)
-        emit(log, f"incremental write results_completed={len(current_results)} markdown={output_md}")
-        write_markdown(current_results, output_md)
+        xiyan_sql_runner = None
+        if args.run_xiyan_sql:
+            xiyan_sql_runner = XiYanSqlMcpRunner()
+            emit(log, f"xiyan_sql_runner created tool={XIYAN_TEXT2SQL_ANSWER_TOOL} database_id=mysql")
 
-    results = run_records(
-        records,
-        client,
-        thread_prefix=thread_prefix,
-        rounds=args.rounds,
-        conversation_mode=args.conversation_mode,
-        max_turns=args.max_turns,
-        simulator=simulator,
-        xiyan_sql_runner=xiyan_sql_runner,
-        log=log,
-        on_results_update=write_progress,
-    )
-    if not results:
-        emit(log, f"writing empty JSONL results to {output_jsonl}")
-        write_jsonl(results, output_jsonl)
-        emit(log, f"writing empty Markdown results to {output_md}")
-        write_markdown(results, output_md)
+        def write_progress(current_results: list[dict[str, Any]]) -> None:
+            emit(log, f"incremental write results_completed={len(current_results)} jsonl={output_jsonl}")
+            write_jsonl(current_results, output_jsonl)
+            emit(log, f"incremental write results_completed={len(current_results)} markdown={output_md}")
+            write_markdown(current_results, output_md)
 
-    print(f"Ran {len(results)} cases")
-    print(f"JSONL: {output_jsonl}")
-    print(f"Markdown: {output_md}")
-    if restricted_mcp_temp_dir is not None:
-        restricted_mcp_temp_dir.cleanup()
+        results = run_records(
+            records,
+            client,
+            thread_prefix=thread_prefix,
+            rounds=args.rounds,
+            conversation_mode=args.conversation_mode,
+            max_turns=args.max_turns,
+            simulator=simulator,
+            xiyan_sql_runner=xiyan_sql_runner,
+            log=log,
+            on_results_update=write_progress,
+        )
+        if not results:
+            emit(log, f"writing empty JSONL results to {output_jsonl}")
+            write_jsonl(results, output_jsonl)
+            emit(log, f"writing empty Markdown results to {output_md}")
+            write_markdown(results, output_md)
+
+        print(f"Ran {len(results)} cases")
+        print(f"JSONL: {output_jsonl}")
+        print(f"Markdown: {output_md}")
+    finally:
+        cleanup_mcp_eval_resources(restricted_mcp_temp_dir, log=log)
     return 0
 
 

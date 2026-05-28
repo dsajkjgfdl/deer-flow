@@ -13,7 +13,7 @@ from deerflow.mcp.client import build_servers_config
 from deerflow.mcp.oauth import build_oauth_tool_interceptor, get_initial_oauth_headers
 from deerflow.mcp.session_pool import get_session_pool
 from deerflow.reflection import resolve_variable
-from deerflow.tools.sync import make_sync_tool_wrapper
+from deerflow.tools.sync import in_sync_tool_one_shot_loop, make_sync_tool_wrapper
 from deerflow.tools.types import Runtime
 
 logger = logging.getLogger(__name__)
@@ -130,35 +130,45 @@ def _make_session_pool_tool(
         runtime: Runtime | None = None,
         **arguments: Any,
     ) -> Any:
-        thread_id = _extract_thread_id(runtime)
-        session = await pool.get_session(server_name, thread_id, connection)
-
-        if tool_interceptors:
+        async def call_with_session(session: Any) -> Any:
             from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 
-            async def base_handler(request: MCPToolCallRequest) -> Any:
-                return await session.call_tool(request.name, request.args)
+            if tool_interceptors:
 
-            handler = base_handler
-            for interceptor in reversed(tool_interceptors):
-                outer = handler
+                async def base_handler(request: MCPToolCallRequest) -> Any:
+                    return await session.call_tool(request.name, request.args)
 
-                async def wrapped(req: Any, _i: Any = interceptor, _h: Any = outer) -> Any:
-                    return await _i(req, _h)
+                handler = base_handler
+                for interceptor in reversed(tool_interceptors):
+                    outer = handler
 
-                handler = wrapped
+                    async def wrapped(req: Any, _i: Any = interceptor, _h: Any = outer) -> Any:
+                        return await _i(req, _h)
 
-            request = MCPToolCallRequest(
-                name=original_name,
-                args=arguments,
-                server_name=server_name,
-                runtime=runtime,
-            )
-            call_tool_result = await handler(request)
-        else:
-            call_tool_result = await session.call_tool(original_name, arguments)
+                    handler = wrapped
 
-        return _convert_call_tool_result(call_tool_result)
+                request = MCPToolCallRequest(
+                    name=original_name,
+                    args=arguments,
+                    server_name=server_name,
+                    runtime=runtime,
+                )
+                call_tool_result = await handler(request)
+            else:
+                call_tool_result = await session.call_tool(original_name, arguments)
+
+            return _convert_call_tool_result(call_tool_result)
+
+        if in_sync_tool_one_shot_loop():
+            from langchain_mcp_adapters.sessions import create_session
+
+            async with create_session(connection) as session:
+                await session.initialize()
+                return await call_with_session(session)
+
+        thread_id = _extract_thread_id(runtime)
+        session = await pool.get_session(server_name, thread_id, connection)
+        return await call_with_session(session)
 
     return StructuredTool(
         name=tool.name,
@@ -245,9 +255,12 @@ async def get_mcp_tools() -> list[BaseTool]:
             tool_name_prefix=True,
         )
 
-        # Get all tools from all servers (discovers tool definitions via
-        # temporary sessions – the persistent-session wrapping is applied below).
-        tools = await client.get_tools()
+        # Discover tools one server at a time. The adapter's all-server path
+        # creates concurrent stdio sessions, which can leak noisy async-generator
+        # shutdown errors on Windows when several local MCP servers are enabled.
+        tools: list[BaseTool] = []
+        for server_name in servers_config:
+            tools.extend(await client.get_tools(server_name=server_name))
         logger.info(f"Successfully loaded {len(tools)} tool(s) from MCP servers")
 
         # Wrap each tool with persistent-session logic.
