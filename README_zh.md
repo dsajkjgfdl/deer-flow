@@ -602,3 +602,25 @@ DeerFlow 建立在开源社区大量优秀工作的基础上。所有让 DeerFlo
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=bytedance/deer-flow&type=Date)](https://star-history.com/#bytedance/deer-flow&Date)
+
+
+# 启动命令
+./scripts/serve.sh --dev
+
+2. 启动后端服务（在不同终端中运行）
+
+终端1 - 启动LangGraph服务器（端口2024）：
+cd D:\study\deer-flow\backend
+uv run langgraph dev --no-browser --no-reload --n-jobs-per-worker 10
+
+终端2 - 启动网关API（端口8001）：
+cd D:\study\deer-flow\backend
+uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001
+
+3. 启动前端（在第三个终端中）
+
+cd D:\study\deer-flow\frontend
+
+或者，如果无法安装pnpm，您可以尝试：
+npm install
+npm run dev
