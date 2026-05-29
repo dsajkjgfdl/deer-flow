@@ -43,6 +43,7 @@ class AgentConfig(BaseModel):
     description: str = ""
     model: str | None = None
     tool_groups: list[str] | None = None
+    mcp_servers: list[str] | None = None
     # skills controls which skills are loaded into the agent's prompt:
     # - None (or omitted): load all enabled skills (default fallback behavior)
     # - [] (explicit empty list): disable all skills
@@ -57,8 +58,13 @@ def resolve_agent_dir(name: str, *, user_id: str | None = None) -> Path:
     1. ``{base_dir}/users/{user_id}/agents/{name}/`` (per-user, current layout).
     2. ``{base_dir}/agents/{name}/`` (legacy shared layout — read-only fallback).
 
-    If neither exists, the per-user path is returned so callers that intend to
-    create the agent write into the new layout.
+    A per-user directory is considered an agent definition only when it has a
+    ``config.yaml``. Per-user memory can create
+    ``users/{user_id}/agents/{name}/`` without defining a private agent, and
+    that must not shadow the shared file-backed agent.
+
+    If neither config exists, the per-user path is returned so callers get an
+    error for the new layout path.
 
     Args:
         name: Validated agent name.
@@ -68,11 +74,11 @@ def resolve_agent_dir(name: str, *, user_id: str | None = None) -> Path:
     paths = get_paths()
     effective_user = user_id or get_effective_user_id()
     user_path = paths.user_agent_dir(effective_user, name)
-    if user_path.exists():
+    if (user_path / "config.yaml").exists():
         return user_path
 
     legacy_path = paths.agent_dir(name)
-    if legacy_path.exists():
+    if (legacy_path / "config.yaml").exists():
         return legacy_path
 
     return user_path

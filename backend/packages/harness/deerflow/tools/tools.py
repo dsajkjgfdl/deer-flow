@@ -41,12 +41,21 @@ def _ensure_sync_invocable_tool(tool: BaseTool) -> BaseTool:
     return tool
 
 
+def filter_mcp_tools_by_server_names[ToolT](tools: list[ToolT], allowed_servers: list[str] | None) -> list[ToolT]:
+    """Filter prefixed MCP tools to the selected server names."""
+    if allowed_servers is None:
+        return tools
+    prefixes = tuple(f"{server_name}_" for server_name in allowed_servers)
+    return [tool for tool in tools if getattr(tool, "name", "").startswith(prefixes)]
+
+
 def get_available_tools(
     groups: list[str] | None = None,
     include_mcp: bool = True,
     model_name: str | None = None,
     subagent_enabled: bool = False,
     *,
+    mcp_servers: list[str] | None = None,
     app_config: AppConfig | None = None,
 ) -> list[BaseTool]:
     """Get all available tools from config.
@@ -124,6 +133,7 @@ def get_available_tools(
             extensions_config = ExtensionsConfig.from_file()
             if extensions_config.get_enabled_mcp_servers():
                 mcp_tools = get_cached_mcp_tools()
+                mcp_tools = filter_mcp_tools_by_server_names(mcp_tools, mcp_servers)
                 if mcp_tools:
                     logger.info(f"Using {len(mcp_tools)} cached MCP tool(s)")
 

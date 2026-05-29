@@ -109,6 +109,14 @@ class SQLiteUserRepository(UserRepository):
             await session.commit()
         return user
 
+    async def list_users(self, *, limit: int = 50, offset: int = 0) -> tuple[list[User], int]:
+        users_stmt = select(UserRow).order_by(UserRow.created_at.desc(), UserRow.email.asc()).offset(offset).limit(limit)
+        total_stmt = select(func.count()).select_from(UserRow)
+        async with self._sf() as session:
+            users_result = await session.execute(users_stmt)
+            total = await session.scalar(total_stmt) or 0
+            return [self._row_to_user(row) for row in users_result.scalars().all()], total
+
     async def count_users(self) -> int:
         stmt = select(func.count()).select_from(UserRow)
         async with self._sf() as session:

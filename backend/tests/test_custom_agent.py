@@ -204,6 +204,30 @@ class TestLoadAgentConfig:
 
         assert cfg.name == "legacy-agent"
 
+    def test_user_memory_dir_does_not_shadow_shared_agent_config(self, tmp_path):
+        """A per-user memory directory is not a per-user agent definition."""
+        _write_agent(
+            tmp_path,
+            "hr-boss-agent",
+            {
+                "name": "hr-boss-agent",
+                "display_name": "HR Boss",
+                "mcp_servers": ["text2cypher"],
+            },
+        )
+        user_agent_dir = tmp_path / "users" / "user-1" / "agents" / "hr-boss-agent"
+        user_agent_dir.mkdir(parents=True)
+        (user_agent_dir / "memory.json").write_text("{}", encoding="utf-8")
+
+        with patch("deerflow.config.agents_config.get_paths", return_value=_make_paths(tmp_path)):
+            from deerflow.config.agents_config import load_agent_config
+
+            cfg = load_agent_config("hr-boss-agent", user_id="user-1")
+
+        assert cfg.name == "hr-boss-agent"
+        assert cfg.display_name == "HR Boss"
+        assert cfg.mcp_servers == ["text2cypher"]
+
 
 # ===========================================================================
 # 4. load_agent_soul

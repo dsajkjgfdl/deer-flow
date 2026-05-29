@@ -272,6 +272,40 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
   });
 
   // Agents list — sidebar & gallery page
+  // Runnable agents list - sidebar & gallery page
+  void page.route("**/api/platform/agents", (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ agents }),
+      });
+    }
+    return route.fallback();
+  });
+
+  // Individual runnable agent - agent chat page
+  void page.route("**/api/platform/agents/*", (route) => {
+    if (route.request().method() === "GET") {
+      const url = route.request().url();
+      const agent = agents.find((a) =>
+        url.endsWith(`/api/platform/agents/${a.name}`),
+      );
+      if (agent) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(agent),
+        });
+      }
+    }
+    return route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "Agent not found" }),
+    });
+  });
+
   void page.route("**/api/agents", (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({

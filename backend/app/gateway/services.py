@@ -20,6 +20,7 @@ from langchain_core.messages.utils import convert_to_messages
 
 from app.gateway.deps import get_run_context, get_run_manager, get_stream_bridge
 from app.gateway.utils import sanitize_log_param
+from deerflow.agents.runtime_resolver import resolve_effective_agent_runtime
 from deerflow.config.app_config import get_app_config
 from deerflow.runtime import (
     END_SENTINEL,
@@ -131,6 +132,8 @@ _CONTEXT_CONFIGURABLE_KEYS: frozenset[str] = frozenset(
         "subagent_enabled",
         "max_concurrent_subagents",
         "agent_name",
+        "effective_mcp_servers",
+        "effective_skills",
         "is_bootstrap",
     }
 )
@@ -169,6 +172,95 @@ def inject_authenticated_user_context(config: dict[str, Any], request: Request) 
     runtime_context = config.setdefault("context", {})
     if isinstance(runtime_context, dict):
         runtime_context["user_id"] = str(user_id)
+
+
+def _normalize_custom_assistant_id(assistant_id: str) -> str:
+    normalized = assistant_id.strip().lower().replace("_", "-")
+    if not normalized or not re.fullmatch(r"[a-z0-9-]+", normalized):
+        raise ValueError(f"Invalid assistant_id {assistant_id!r}: must contain only letters, digits, and hyphens after normalization.")
+    return normalized
+
+
+def _normalize_requested_agent_name(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        value = str(value)
+    return _normalize_custom_assistant_id(value)
+
+
+def _requested_agent_name_from_body(body: Any) -> str | None:
+    body_context = getattr(body, "context", None)
+    if isinstance(body_context, Mapping) and body_context.get("agent_name") is not None:
+        return _normalize_requested_agent_name(body_context["agent_name"])
+
+    request_config = getattr(body, "config", None)
+    if isinstance(request_config, Mapping):
+        config_context = request_config.get("context")
+        if isinstance(config_context, Mapping) and config_context.get("agent_name") is not None:
+            return _normalize_requested_agent_name(config_context["agent_name"])
+
+        configurable = request_config.get("configurable")
+        if isinstance(configurable, Mapping) and configurable.get("agent_name") is not None:
+            return _normalize_requested_agent_name(configurable["agent_name"])
+
+    assistant_id = getattr(body, "assistant_id", None)
+    if assistant_id and assistant_id != _DEFAULT_ASSISTANT_ID:
+        return _normalize_custom_assistant_id(str(assistant_id))
+    return None
+
+
+def _platform_repo_from_request(request: Request) -> Any | None:
+    state = getattr(request, "state", None)
+    repo = getattr(state, "platform_repo", None)
+    if repo is not None:
+        return repo
+
+    app = getattr(request, "app", None)
+    app_state = getattr(app, "state", None)
+    return getattr(app_state, "platform_repo", None)
+
+
+def _authenticated_user_from_request(request: Request) -> Any | None:
+    state = getattr(request, "state", None)
+    user = getattr(state, "user", None)
+    if user is not None:
+        return user
+
+    auth = getattr(state, "auth", None)
+    return getattr(auth, "user", None)
+
+
+async def resolve_and_apply_effective_runtime(body: Any, request: Request):
+    """Resolve the authorized agent runtime and stamp it onto the run body."""
+
+    user = _authenticated_user_from_request(request)
+    if user is None:
+        return None
+
+    effective_runtime = await resolve_effective_agent_runtime(
+        user=user,
+        requested_agent_name=_requested_agent_name_from_body(body),
+        platform_repo=_platform_repo_from_request(request),
+        app_config=get_app_config(),
+    )
+
+    body_context = getattr(body, "context", None)
+    if not isinstance(body_context, dict):
+        body_context = {}
+        body.context = body_context
+    if effective_runtime.agent_name is not None:
+        body_context["agent_name"] = effective_runtime.agent_name
+    body_context["effective_mcp_servers"] = effective_runtime.effective_mcp_servers
+    body_context["effective_skills"] = effective_runtime.effective_skills
+
+    metadata = getattr(body, "metadata", None)
+    if not isinstance(metadata, dict):
+        metadata = {}
+        body.metadata = metadata
+    metadata.update(effective_runtime.trace_metadata)
+
+    return effective_runtime
 
 
 def resolve_agent_factory(assistant_id: str | None):
@@ -240,9 +332,7 @@ def build_run_config(
     # Inject custom agent name when the caller specified a non-default assistant.
     # Honour an explicit agent_name in the active runtime options container.
     if assistant_id and assistant_id != _DEFAULT_ASSISTANT_ID:
-        normalized = assistant_id.strip().lower().replace("_", "-")
-        if not normalized or not re.fullmatch(r"[a-z0-9-]+", normalized):
-            raise ValueError(f"Invalid assistant_id {assistant_id!r}: must contain only letters, digits, and hyphens after normalization.")
+        normalized = _normalize_custom_assistant_id(assistant_id)
         if "configurable" in config:
             target = config["configurable"]
         elif "context" in config:
@@ -301,6 +391,15 @@ async def start_run(
                 status_code=400,
                 detail=f"Model {model_name!r} is not in the configured model allowlist",
             )
+
+    try:
+        await resolve_and_apply_effective_runtime(body, request)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
         record = await run_mgr.create_or_reject(

@@ -27,14 +27,16 @@ function isAgentsApiDisabledDetail(detail: string | undefined): boolean {
 }
 
 export async function listAgents(): Promise<Agent[]> {
-  const res = await fetch(`${getBackendBaseURL()}/api/agents`);
+  const res = await fetch(`${getBackendBaseURL()}/api/platform/agents`);
   if (!res.ok) throw new Error(`Failed to load agents: ${res.statusText}`);
   const data = (await res.json()) as { agents: Agent[] };
   return data.agents;
 }
 
 export async function getAgent(name: string): Promise<Agent> {
-  const res = await fetch(`${getBackendBaseURL()}/api/agents/${name}`);
+  const res = await fetch(
+    `${getBackendBaseURL()}/api/platform/agents/${name}`,
+  );
   if (!res.ok) throw new Error(`Agent '${name}' not found`);
   return res.json() as Promise<Agent>;
 }

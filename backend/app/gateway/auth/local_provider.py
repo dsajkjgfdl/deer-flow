@@ -87,6 +87,10 @@ class LocalAuthProvider(AuthProvider):
         """Get user by OAuth provider and ID."""
         return await self._repo.get_user_by_oauth(provider, oauth_id)
 
+    async def list_users(self, *, limit: int = 50, offset: int = 0) -> tuple[list[User], int]:
+        """Return a paginated user list and total count."""
+        return await self._repo.list_users(limit=limit, offset=offset)
+
     async def count_users(self) -> int:
         """Return total number of registered users."""
         return await self._repo.count_users()

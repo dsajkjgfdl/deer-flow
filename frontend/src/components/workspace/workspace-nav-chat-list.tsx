@@ -1,6 +1,6 @@
 "use client";
 
-import { BotIcon, MessagesSquare } from "lucide-react";
+import { BotIcon, MessagesSquare, ShieldCheckIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -10,11 +10,16 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
+import { useAuth } from "@/core/auth/AuthProvider";
+import { canAccessPlatformAdmin } from "@/core/auth/roles";
 import { useI18n } from "@/core/i18n/hooks";
 
 export function WorkspaceNavChatList() {
   const { t } = useI18n();
+  const { user } = useAuth();
   const pathname = usePathname();
+  const showPlatformAdmin = canAccessPlatformAdmin(user);
+
   return (
     <SidebarGroup className="pt-1">
       <SidebarMenu>
@@ -37,6 +42,19 @@ export function WorkspaceNavChatList() {
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>
+        {showPlatformAdmin && (
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={pathname.startsWith("/workspace/admin")}
+              asChild
+            >
+              <Link className="text-muted-foreground" href="/workspace/admin">
+                <ShieldCheckIcon />
+                <span>{t.sidebar.platformAdmin}</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        )}
       </SidebarMenu>
     </SidebarGroup>
   );

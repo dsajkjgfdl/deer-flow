@@ -6,3 +6,6 @@ tool_groups:
   - file:read
 skills:
   - hr-boss
+mcp_servers:
+  - hr-graphrag-qa
+  - text2cypher

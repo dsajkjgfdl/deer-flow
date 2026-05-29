@@ -436,6 +436,55 @@ def test_inject_authenticated_user_context_overrides_client_user_id():
 # ---------------------------------------------------------------------------
 
 
+def test_resolve_and_apply_effective_runtime_adds_agent_context(monkeypatch):
+    """Gateway should persist the authorized agent runtime before run creation."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.gateway import services
+    from deerflow.agents.runtime_resolver import EffectiveAgentRuntime
+
+    repo = object()
+    app_config = object()
+    user = SimpleNamespace(id="user-1", system_role="user")
+    body = SimpleNamespace(
+        assistant_id="hr-boss-agent",
+        config=None,
+        context=None,
+        metadata=None,
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(user=user),
+        app=SimpleNamespace(state=SimpleNamespace(platform_repo=repo)),
+    )
+
+    async def fake_resolve_effective_agent_runtime(**kwargs):
+        assert kwargs == {
+            "user": user,
+            "requested_agent_name": "hr-boss-agent",
+            "platform_repo": repo,
+            "app_config": app_config,
+        }
+        return EffectiveAgentRuntime(
+            user_id="user-1",
+            requested_agent_name="hr-boss-agent",
+            agent_name="hr-boss-agent",
+            effective_mcp_servers=["text2cypher"],
+            effective_skills=["hr-boss"],
+            trace_metadata={"agent_config_hash": "config-hash"},
+        )
+
+    monkeypatch.setattr(services, "get_app_config", lambda: app_config)
+    monkeypatch.setattr(services, "resolve_effective_agent_runtime", fake_resolve_effective_agent_runtime)
+
+    asyncio.run(services.resolve_and_apply_effective_runtime(body, request))
+
+    assert body.context["agent_name"] == "hr-boss-agent"
+    assert body.context["effective_mcp_servers"] == ["text2cypher"]
+    assert body.context["effective_skills"] == ["hr-boss"]
+    assert body.metadata["agent_config_hash"] == "config-hash"
+
+
 def test_build_run_config_with_context():
     """When caller sends 'context', prefer it over 'configurable'."""
     from app.gateway.services import build_run_config

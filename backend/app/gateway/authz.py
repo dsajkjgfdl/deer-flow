@@ -194,6 +194,35 @@ def require_auth[**P, T](func: Callable[P, T]) -> Callable[P, T]:
     return wrapper
 
 
+def require_admin[**P, T](func: Callable[P, T]) -> Callable[P, T]:
+    """Authenticate the request and require ``system_role == "admin"``."""
+
+    @functools.wraps(func)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        request = kwargs.get("request")
+        if request is None:
+            if "request" in inspect.signature(func).parameters:
+                kwargs["request"] = _make_test_request_stub()
+            else:
+                raise ValueError("require_admin decorator requires 'request' parameter")
+            request = kwargs["request"]
+
+        if getattr(request, "_deerflow_test_bypass_auth", False):
+            return await func(*args, **kwargs)
+
+        auth_context = getattr(request.state, "auth", None)
+        if auth_context is None:
+            auth_context = await _authenticate(request)
+        request.state.auth = auth_context
+        user = auth_context.require_user()
+        if user.system_role != "admin":
+            raise HTTPException(status_code=403, detail="Admin role required")
+
+        return await func(*args, **kwargs)
+
+    return wrapper
+
+
 def require_permission(
     resource: str,
     action: str,

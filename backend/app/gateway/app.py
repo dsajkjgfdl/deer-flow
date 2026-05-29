@@ -20,6 +20,8 @@ from app.gateway.routers import (
     mcp,
     memory,
     models,
+    platform_admin,
+    platform_agents,
     runs,
     skills,
     suggestions,
@@ -288,6 +290,14 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
                 "description": "Create and manage custom agents with per-agent config and prompts",
             },
             {
+                "name": "platform-admin",
+                "description": "Enterprise agent platform administration APIs",
+            },
+            {
+                "name": "platform-agents",
+                "description": "User-facing enterprise agent catalog APIs",
+            },
+            {
                 "name": "suggestions",
                 "description": "Generate follow-up question suggestions for conversations",
             },
@@ -353,6 +363,10 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)
+
+    # Enterprise platform APIs are mounted at /api/platform
+    app.include_router(platform_admin.router)
+    app.include_router(platform_agents.router)
 
     # Suggestions API is mounted at /api/threads/{thread_id}/suggestions
     app.include_router(suggestions.router)

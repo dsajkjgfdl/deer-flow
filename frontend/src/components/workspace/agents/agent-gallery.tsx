@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { useAgents } from "@/core/agents";
+import { useAuth } from "@/core/auth/AuthProvider";
+import { canManageCustomAgents } from "@/core/auth/roles";
 import { useI18n } from "@/core/i18n/hooks";
 
 import { AgentCard } from "./agent-card";
@@ -12,9 +14,12 @@ import { AgentCard } from "./agent-card";
 export function AgentGallery() {
   const { t } = useI18n();
   const { agents, isLoading } = useAgents();
+  const { user } = useAuth();
   const router = useRouter();
+  const canManageAgents = canManageCustomAgents(user);
 
   const handleNewAgent = () => {
+    if (!canManageAgents) return;
     router.push("/workspace/agents/new");
   };
 
@@ -28,10 +33,12 @@ export function AgentGallery() {
             {t.agents.description}
           </p>
         </div>
-        <Button onClick={handleNewAgent}>
-          <PlusIcon className="mr-1.5 h-4 w-4" />
-          {t.agents.newAgent}
-        </Button>
+        {canManageAgents && (
+          <Button onClick={handleNewAgent}>
+            <PlusIcon className="mr-1.5 h-4 w-4" />
+            {t.agents.newAgent}
+          </Button>
+        )}
       </div>
 
       {/* Content */}
@@ -51,15 +58,25 @@ export function AgentGallery() {
                 {t.agents.emptyDescription}
               </p>
             </div>
-            <Button variant="outline" className="mt-2" onClick={handleNewAgent}>
-              <PlusIcon className="mr-1.5 h-4 w-4" />
-              {t.agents.newAgent}
-            </Button>
+            {canManageAgents && (
+              <Button
+                variant="outline"
+                className="mt-2"
+                onClick={handleNewAgent}
+              >
+                <PlusIcon className="mr-1.5 h-4 w-4" />
+                {t.agents.newAgent}
+              </Button>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {agents.map((agent) => (
-              <AgentCard key={agent.name} agent={agent} />
+              <AgentCard
+                key={agent.name}
+                agent={agent}
+                canManage={canManageAgents}
+              />
             ))}
           </div>
         )}

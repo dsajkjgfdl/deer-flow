@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Mapping
 from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
@@ -12,11 +14,14 @@ from deerflow.config.extensions_config import ExtensionsConfig
 from deerflow.mcp.client import build_servers_config
 from deerflow.mcp.oauth import build_oauth_tool_interceptor, get_initial_oauth_headers
 from deerflow.mcp.session_pool import get_session_pool
+from deerflow.persistence.engine import get_session_factory
+from deerflow.persistence.platform import PlatformRepository
 from deerflow.reflection import resolve_variable
 from deerflow.tools.sync import in_sync_tool_one_shot_loop, make_sync_tool_wrapper
 from deerflow.tools.types import Runtime
 
 logger = logging.getLogger(__name__)
+_MAX_AUDIT_ERROR_LENGTH = 500
 
 
 def _extract_thread_id(runtime: Runtime | None) -> str:
@@ -35,6 +40,67 @@ def _extract_thread_id(runtime: Runtime | None) -> str:
         return str(tid) if tid is not None else "default"
     except RuntimeError:
         return "default"
+
+
+def _runtime_context(runtime: Runtime | None) -> Mapping[str, Any]:
+    context = getattr(runtime, "context", None)
+    return context if isinstance(context, Mapping) else {}
+
+
+def _runtime_configurable(runtime: Runtime | None) -> Mapping[str, Any]:
+    config = getattr(runtime, "config", None)
+    if not isinstance(config, Mapping):
+        return {}
+    configurable = config.get("configurable")
+    return configurable if isinstance(configurable, Mapping) else {}
+
+
+def _runtime_value(runtime: Runtime | None, key: str) -> Any:
+    context = _runtime_context(runtime)
+    if key in context:
+        return context[key]
+    configurable = _runtime_configurable(runtime)
+    return configurable.get(key)
+
+
+def _truncate_audit_error(error: str | None) -> str | None:
+    if error is None:
+        return None
+    return error[:_MAX_AUDIT_ERROR_LENGTH]
+
+
+async def write_tool_audit_from_runtime(
+    runtime: Runtime | None,
+    *,
+    tool_name: str,
+    mcp_server_name: str | None,
+    status: str,
+    latency_ms: int | None,
+    error: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Best-effort tool audit write from LangGraph runtime context."""
+
+    session_factory = get_session_factory()
+    if session_factory is None:
+        return
+
+    try:
+        repo = PlatformRepository(session_factory)
+        await repo.write_tool_audit(
+            tool_name=tool_name,
+            status=status,
+            run_id=_runtime_value(runtime, "run_id"),
+            thread_id=_runtime_value(runtime, "thread_id"),
+            user_id=_runtime_value(runtime, "user_id"),
+            agent_name=_runtime_value(runtime, "agent_name"),
+            mcp_server_name=mcp_server_name,
+            latency_ms=latency_ms,
+            error=_truncate_audit_error(error),
+            metadata=metadata or {},
+        )
+    except Exception:
+        logger.warning("Failed to write tool audit for %s", tool_name, exc_info=True)
 
 
 def _convert_call_tool_result(call_tool_result: Any) -> Any:
@@ -159,16 +225,35 @@ def _make_session_pool_tool(
 
             return _convert_call_tool_result(call_tool_result)
 
-        if in_sync_tool_one_shot_loop():
-            from langchain_mcp_adapters.sessions import create_session
+        start = time.perf_counter()
+        status = "success"
+        error: str | None = None
+        try:
+            if in_sync_tool_one_shot_loop():
+                from langchain_mcp_adapters.sessions import create_session
 
-            async with create_session(connection) as session:
-                await session.initialize()
-                return await call_with_session(session)
+                async with create_session(connection) as session:
+                    await session.initialize()
+                    return await call_with_session(session)
 
-        thread_id = _extract_thread_id(runtime)
-        session = await pool.get_session(server_name, thread_id, connection)
-        return await call_with_session(session)
+            thread_id = _extract_thread_id(runtime)
+            session = await pool.get_session(server_name, thread_id, connection)
+            return await call_with_session(session)
+        except Exception as exc:
+            status = "error"
+            error = str(exc)
+            raise
+        finally:
+            latency_ms = max(0, int((time.perf_counter() - start) * 1000))
+            await write_tool_audit_from_runtime(
+                runtime,
+                tool_name=tool.name,
+                mcp_server_name=server_name,
+                status=status,
+                latency_ms=latency_ms,
+                error=error,
+                metadata={"argument_keys": sorted(str(key) for key in arguments)},
+            )
 
     return StructuredTool(
         name=tool.name,

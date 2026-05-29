@@ -7,6 +7,7 @@ The actual ORM classes have moved to entity-specific subpackages:
 - ``deerflow.persistence.thread_meta``
 - ``deerflow.persistence.run``
 - ``deerflow.persistence.feedback``
+- ``deerflow.persistence.platform``
 - ``deerflow.persistence.user``
 
 ``RunEventRow`` remains in ``deerflow.persistence.models.run_event`` because
@@ -16,8 +17,18 @@ there is no matching entity directory.
 
 from deerflow.persistence.feedback.model import FeedbackRow
 from deerflow.persistence.models.run_event import RunEventRow
+from deerflow.persistence.platform.model import AdminAuditLogRow, AgentAssignmentRow, ToolAuditLogRow
 from deerflow.persistence.run.model import RunRow
 from deerflow.persistence.thread_meta.model import ThreadMetaRow
 from deerflow.persistence.user.model import UserRow
 
-__all__ = ["FeedbackRow", "RunEventRow", "RunRow", "ThreadMetaRow", "UserRow"]
+__all__ = [
+    "AdminAuditLogRow",
+    "AgentAssignmentRow",
+    "FeedbackRow",
+    "RunEventRow",
+    "RunRow",
+    "ThreadMetaRow",
+    "ToolAuditLogRow",
+    "UserRow",
+]

@@ -10,6 +10,7 @@ test("prefers display_name over internal name", () => {
       description: "",
       model: null,
       tool_groups: null,
+      mcp_servers: null,
       skills: null,
     }),
   ).toBe("人岗匹配智能体");
@@ -23,6 +24,7 @@ test("falls back to internal name when display_name is blank", () => {
       description: "",
       model: null,
       tool_groups: null,
+      mcp_servers: null,
       skills: null,
     }),
   ).toBe("hr-boss-agent");
