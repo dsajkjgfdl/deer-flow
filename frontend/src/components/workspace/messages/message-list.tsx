@@ -9,6 +9,7 @@ import {
 } from "@/components/ai-elements/conversation";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/core/i18n/hooks";
+import { getAssistantFeedbackTarget } from "@/core/messages/feedback";
 import {
   buildTokenDebugSteps,
   type TokenUsageInlineMode,
@@ -39,7 +40,7 @@ import { StreamingIndicator } from "../streaming-indicator";
 
 import { MarkdownContent } from "./markdown-content";
 import { MessageGroup } from "./message-group";
-import { MessageListItem } from "./message-list-item";
+import { FeedbackButtons, MessageListItem } from "./message-list-item";
 import {
   MessageTokenUsageDebugList,
   MessageTokenUsageList,
@@ -196,21 +197,35 @@ export function MessageList({
     [messages, thread.getMessagesMetadata, thread.isLoading],
   );
 
-  const renderAssistantCopyButton = useCallback(
+  const renderAssistantActions = useCallback(
     (messages: Message[], isStreaming: boolean) => {
       const clipboardData = getAssistantTurnCopyData(messages, { isStreaming });
+      const feedbackTarget = getAssistantFeedbackTarget(messages);
 
-      if (!clipboardData) {
+      if (!clipboardData && !feedbackTarget) {
         return null;
       }
 
       return (
-        <div className="mt-2 flex justify-start opacity-0 transition-opacity delay-200 duration-300 group-hover/assistant-turn:opacity-100">
-          <CopyButton clipboardData={clipboardData} />
+        <div className="mt-2 flex justify-start">
+          <div className="pointer-events-auto flex gap-1">
+            {clipboardData && (
+              <span className="opacity-0 transition-opacity delay-200 duration-300 group-hover/assistant-turn:opacity-100">
+                <CopyButton clipboardData={clipboardData} />
+              </span>
+            )}
+            {feedbackTarget && (
+              <FeedbackButtons
+                threadId={threadId}
+                runId={feedbackTarget.runId}
+                initialFeedback={feedbackTarget.feedback}
+              />
+            )}
+          </div>
         </div>
       );
     },
-    [],
+    [threadId],
   );
 
   const renderTokenUsage = useCallback(
@@ -301,7 +316,7 @@ export function MessageList({
                   turnUsageMessages,
                 })}
                 {group.type === "assistant" &&
-                  renderAssistantCopyButton(
+                  renderAssistantActions(
                     group.messages,
                     isAssistantMessageGroupStreaming(
                       group.messages,

@@ -8,6 +8,7 @@ import {
 import {
   memo,
   useCallback,
+  useEffect,
   useMemo,
   useState,
   type AnchorHTMLAttributes,
@@ -51,7 +52,7 @@ import { CopyButton } from "../copy-button";
 
 import { MarkdownContent } from "./markdown-content";
 
-function FeedbackButtons({
+export function FeedbackButtons({
   threadId,
   runId,
   initialFeedback,
@@ -64,6 +65,10 @@ function FeedbackButtons({
     initialFeedback,
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    setFeedback(initialFeedback);
+  }, [initialFeedback]);
 
   const handleClick = useCallback(
     async (rating: number) => {
@@ -90,6 +95,7 @@ function FeedbackButtons({
     <div className="flex gap-1">
       <button
         type="button"
+        aria-label="Positive feedback"
         className={cn(
           "text-muted-foreground hover:text-foreground rounded-md p-1 transition-colors",
           feedback?.rating === 1 && "text-foreground",
@@ -103,6 +109,7 @@ function FeedbackButtons({
       </button>
       <button
         type="button"
+        aria-label="Negative feedback"
         className={cn(
           "text-muted-foreground hover:text-foreground rounded-md p-1 transition-colors",
           feedback?.rating === -1 && "text-foreground",

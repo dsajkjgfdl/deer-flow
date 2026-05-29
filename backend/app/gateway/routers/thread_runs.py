@@ -28,6 +28,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/threads", tags=["runs"])
 
 
+_AI_MESSAGE_EVENT_TYPES = {"ai_message", "llm.ai.response"}
+
+
+def _is_ai_message_event(message: dict) -> bool:
+    return message.get("event_type") in _AI_MESSAGE_EVENT_TYPES
+
+
+def _feedback_payload(feedback: dict | None) -> dict | None:
+    if not feedback:
+        return None
+    return {
+        "feedback_id": feedback["feedback_id"],
+        "rating": feedback["rating"],
+        "comment": feedback.get("comment"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------------------
@@ -347,10 +364,10 @@ async def list_thread_messages(
     user_id = await get_current_user(request)
     feedback_map = await feedback_repo.list_by_thread_grouped(thread_id, user_id=user_id)
 
-    # Find the last ai_message per run_id
+    # Find the last AI response per run_id
     last_ai_per_run: dict[str, int] = {}  # run_id -> index in messages list
     for i, msg in enumerate(messages):
-        if msg.get("event_type") == "ai_message":
+        if _is_ai_message_event(msg):
             last_ai_per_run[msg["run_id"]] = i
 
     # Attach feedback field
@@ -359,15 +376,7 @@ async def list_thread_messages(
         if i in last_ai_indices:
             run_id = msg["run_id"]
             fb = feedback_map.get(run_id)
-            msg["feedback"] = (
-                {
-                    "feedback_id": fb["feedback_id"],
-                    "rating": fb["rating"],
-                    "comment": fb.get("comment"),
-                }
-                if fb
-                else None
-            )
+            msg["feedback"] = _feedback_payload(fb)
         else:
             msg["feedback"] = None
 
@@ -398,6 +407,21 @@ async def list_run_messages(
     )
     has_more = len(rows) > limit
     data = rows[:limit] if has_more else rows
+
+    feedback_repo = get_feedback_repo(request)
+    user_id = await get_current_user(request)
+    feedback_rows = await feedback_repo.list_by_run(thread_id, run_id, user_id=user_id)
+    feedback = feedback_rows[0] if feedback_rows else None
+
+    last_ai_index: int | None = None
+    for i, msg in enumerate(data):
+        msg["feedback"] = None
+        if _is_ai_message_event(msg):
+            last_ai_index = i
+
+    if last_ai_index is not None:
+        data[last_ai_index]["feedback"] = _feedback_payload(feedback)
+
     return {"data": data, "has_more": has_more}
 
 

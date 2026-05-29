@@ -23,6 +23,7 @@ import type {
   AgentThread,
   AgentThreadState,
   RunMessage,
+  ThreadDisplayMessage,
   ThreadTokenUsageResponse,
 } from "./types";
 
@@ -44,6 +45,10 @@ export type ThreadStreamOptions = {
 type SendMessageOptions = {
   additionalKwargs?: Record<string, unknown>;
 };
+
+export function threadRunsQueryKey(threadId?: string | null) {
+  return ["thread", threadId] as const;
+}
 
 function isNonEmptyString(value: string | undefined): value is string {
   return typeof value === "string" && value.length > 0;
@@ -79,6 +84,23 @@ function dedupeMessagesByIdentity(messages: Message[]): Message[] {
   });
 }
 
+function mergeDisplayMetadata(
+  message: Message,
+  historyMessage: Message | undefined,
+): Message {
+  const history = historyMessage as ThreadDisplayMessage | undefined;
+  const current = message as ThreadDisplayMessage;
+  if (!history?.run_id) {
+    return message;
+  }
+
+  return {
+    ...message,
+    run_id: current.run_id ?? history.run_id,
+    feedback: current.feedback ?? history.feedback ?? null,
+  } as ThreadDisplayMessage;
+}
+
 function findLatestUnloadedRunIndex(
   runs: Run[],
   loadedRunIds: ReadonlySet<string>,
@@ -97,8 +119,22 @@ export function mergeMessages(
   threadMessages: Message[],
   optimisticMessages: Message[],
 ): Message[] {
+  const historyByIdentity = new Map<string, Message>();
+  historyMessages.forEach((message) => {
+    const identity = messageIdentity(message);
+    if (identity) {
+      historyByIdentity.set(identity, message);
+    }
+  });
+  const mergedThreadMessages = threadMessages.map((message) => {
+    const identity = messageIdentity(message);
+    return mergeDisplayMetadata(
+      message,
+      identity ? historyByIdentity.get(identity) : undefined,
+    );
+  });
   const threadMessageIds = new Set(
-    threadMessages.map(messageIdentity).filter(isNonEmptyString),
+    mergedThreadMessages.map(messageIdentity).filter(isNonEmptyString),
   );
 
   // The overlap is a contiguous suffix of historyMessages (newest history == oldest thread).
@@ -120,7 +156,7 @@ export function mergeMessages(
 
   return dedupeMessagesByIdentity([
     ...historyMessages.slice(0, cutoff),
-    ...threadMessages,
+    ...mergedThreadMessages,
     ...optimisticMessages,
   ]);
 }
@@ -366,6 +402,9 @@ export function useThreadStream({
       );
       void queryClient.invalidateQueries({ queryKey: ["threads", "search"] });
       if (threadIdRef.current && !isMock) {
+        void queryClient.invalidateQueries({
+          queryKey: threadRunsQueryKey(threadIdRef.current),
+        });
         void queryClient.invalidateQueries({
           queryKey: threadTokenUsageQueryKey(threadIdRef.current),
         });
@@ -677,6 +716,16 @@ export function useThreadStream({
   } as const;
 }
 
+export function runMessageToDisplayMessage(
+  runMessage: RunMessage,
+): ThreadDisplayMessage {
+  return {
+    ...runMessage.content,
+    run_id: runMessage.run_id,
+    feedback: runMessage.feedback ?? null,
+  };
+}
+
 export function useThreadHistory(threadId: string) {
   const runs = useThreadRuns(threadId);
   const threadIdRef = useRef(threadId);
@@ -740,7 +789,7 @@ export function useThreadHistory(threadId: string) {
         });
         const _messages = result.data
           .filter((m) => !m.metadata.caller?.startsWith("middleware:"))
-          .map((m) => m.content);
+          .map(runMessageToDisplayMessage);
         if (threadIdRef.current !== requestThreadId) {
           return;
         }
@@ -874,7 +923,7 @@ export function useThreads(
 export function useThreadRuns(threadId?: string) {
   const apiClient = getAPIClient();
   return useQuery<Run[]>({
-    queryKey: ["thread", threadId],
+    queryKey: threadRunsQueryKey(threadId),
     queryFn: async () => {
       if (!threadId) {
         return [];

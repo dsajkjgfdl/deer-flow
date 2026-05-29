@@ -17,7 +17,7 @@ from deerflow.runtime.runs.store.memory import MemoryRunStore
 # ---------------------------------------------------------------------------
 
 
-def _make_app(event_store=None, run_manager=None):
+def _make_app(event_store=None, run_manager=None, feedback_repo=None):
     """Build a test FastAPI app with stub auth and mocked state."""
     app = make_authed_test_app()
     app.include_router(thread_runs.router)
@@ -26,6 +26,7 @@ def _make_app(event_store=None, run_manager=None):
         app.state.run_event_store = event_store
     if run_manager is not None:
         app.state.run_manager = run_manager
+    app.state.feedback_repo = feedback_repo if feedback_repo is not None else _make_feedback_repo([])
 
     return app
 
@@ -37,8 +38,21 @@ def _make_event_store(rows: list[dict]):
     return store
 
 
-def _make_message(seq: int) -> dict:
-    return {"seq": seq, "event_type": "ai_message", "category": "message", "content": f"msg-{seq}"}
+def _make_feedback_repo(rows: list[dict]):
+    """Return an AsyncMock feedback repo whose list_by_run() returns rows."""
+    repo = MagicMock()
+    repo.list_by_run = AsyncMock(return_value=rows)
+    return repo
+
+
+def _make_message(seq: int, event_type: str = "ai_message") -> dict:
+    return {
+        "seq": seq,
+        "run_id": "run-1",
+        "event_type": event_type,
+        "category": "message",
+        "content": f"msg-{seq}",
+    }
 
 
 def _make_store_only_run_manager() -> RunManager:
@@ -150,6 +164,42 @@ def test_empty_data_when_no_messages():
     body = response.json()
     assert body["data"] == []
     assert body["has_more"] is False
+
+
+def test_attaches_feedback_to_last_ai_message_for_run():
+    """Existing run feedback is attached to the last AI message in the page."""
+    rows = [
+        _make_message(1, "llm.human.input"),
+        _make_message(2, "llm.ai.response"),
+        _make_message(3, "tool_message"),
+        _make_message(4, "llm.ai.response"),
+    ]
+    feedback = {
+        "feedback_id": "fb-1",
+        "thread_id": "thread-7",
+        "run_id": "run-7",
+        "rating": -1,
+        "comment": "needs correction",
+    }
+    feedback_repo = _make_feedback_repo([feedback])
+    app = _make_app(event_store=_make_event_store(rows), feedback_repo=feedback_repo)
+
+    with TestClient(app) as client:
+        response = client.get("/api/threads/thread-7/runs/run-7/messages")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"][0]["feedback"] is None
+    assert body["data"][1]["feedback"] is None
+    assert body["data"][2]["feedback"] is None
+    assert body["data"][3]["feedback"] == {
+        "feedback_id": "fb-1",
+        "rating": -1,
+        "comment": "needs correction",
+    }
+    feedback_repo.list_by_run.assert_awaited_once()
+    assert feedback_repo.list_by_run.await_args.args[:2] == ("thread-7", "run-7")
+    assert "user_id" in feedback_repo.list_by_run.await_args.kwargs
 
 
 def test_get_run_hydrates_store_only_run():

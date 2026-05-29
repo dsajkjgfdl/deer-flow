@@ -1,5 +1,6 @@
 import type { Message, Thread } from "@langchain/langgraph-sdk";
 
+import type { FeedbackData } from "../api/feedback";
 import type { Todo } from "../todos";
 
 export interface AgentThreadState extends Record<string, unknown> {
@@ -30,7 +31,13 @@ export interface RunMessage {
     caller: string;
   };
   created_at: string;
+  feedback?: FeedbackData | null;
 }
+
+export type ThreadDisplayMessage = Message & {
+  run_id?: string;
+  feedback?: FeedbackData | null;
+};
 
 export interface ThreadTokenUsageResponse {
   thread_id: string;

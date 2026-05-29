@@ -49,6 +49,37 @@ test("mergeMessages lets live thread messages replace overlapping history", () =
   ]);
 });
 
+test("mergeMessages preserves feedback metadata when live messages replace history", () => {
+  const historyAi = {
+    id: "ai-1",
+    type: "ai",
+    content: "history",
+    run_id: "run-1",
+    feedback: {
+      feedback_id: "fb-1",
+      rating: 1,
+      comment: null,
+    },
+  } as Message;
+  const liveAi = {
+    id: "ai-1",
+    type: "ai",
+    content: "live",
+  } as Message;
+
+  expect(mergeMessages([historyAi], [liveAi], [])).toEqual([
+    {
+      ...liveAi,
+      run_id: "run-1",
+      feedback: {
+        feedback_id: "fb-1",
+        rating: 1,
+        comment: null,
+      },
+    },
+  ]);
+});
+
 test("mergeMessages deduplicates tool messages by tool_call_id", () => {
   const oldTool = {
     id: "tool-message-old",
