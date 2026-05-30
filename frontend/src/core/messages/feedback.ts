@@ -8,6 +8,14 @@ export type AssistantFeedbackTarget = {
   feedback: FeedbackData | null;
 };
 
+export function buildFeedbackPayload(rating: number, comment?: string) {
+  const normalizedComment = comment?.trim();
+  return {
+    rating,
+    comment: normalizedComment ? normalizedComment : null,
+  };
+}
+
 export function getAssistantFeedbackTarget(
   messages: Message[],
 ): AssistantFeedbackTarget | null {

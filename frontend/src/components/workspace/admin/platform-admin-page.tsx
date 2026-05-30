@@ -5,6 +5,7 @@ import {
   ClipboardListIcon,
   KeyRoundIcon,
   LibraryIcon,
+  MessageSquareIcon,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -12,10 +13,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { AgentCatalogPage } from "./agent-catalog-page";
 import { AuditPage } from "./audit-page";
+import { FeedbackPage } from "./feedback-page";
 import { MonitoringPage } from "./monitoring-page";
 import { UserAgentAssignmentPage } from "./user-agent-assignment-page";
 
-type PlatformAdminTab = "catalog" | "assignments" | "monitoring" | "audit";
+type PlatformAdminTab =
+  | "catalog"
+  | "assignments"
+  | "monitoring"
+  | "feedback"
+  | "audit";
 
 export function PlatformAdminPage() {
   const [activeTab, setActiveTab] = useState<PlatformAdminTab>("catalog");
@@ -62,6 +69,13 @@ export function PlatformAdminPage() {
               <ActivityIcon className="h-4 w-4" />
               Monitoring
             </TabsTrigger>
+            <TabsTrigger
+              value="feedback"
+              onClick={() => setActiveTab("feedback")}
+            >
+              <MessageSquareIcon className="h-4 w-4" />
+              Feedback
+            </TabsTrigger>
             <TabsTrigger value="audit" onClick={() => setActiveTab("audit")}>
               <ClipboardListIcon className="h-4 w-4" />
               Audit
@@ -76,6 +90,9 @@ export function PlatformAdminPage() {
           </TabsContent>
           <TabsContent value="monitoring">
             <MonitoringPage />
+          </TabsContent>
+          <TabsContent value="feedback">
+            <FeedbackPage />
           </TabsContent>
           <TabsContent value="audit">
             <AuditPage />

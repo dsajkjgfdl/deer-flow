@@ -1,11 +1,16 @@
 import { getBackendBaseURL } from "../config";
+import { buildFeedbackPayload } from "../messages/feedback";
 
 import { fetch } from "./fetcher";
 
 export interface FeedbackData {
   feedback_id: string;
+  run_id?: string;
+  thread_id?: string;
+  user_id?: string | null;
   rating: number;
   comment: string | null;
+  created_at?: string;
 }
 
 export async function upsertFeedback(
@@ -19,7 +24,7 @@ export async function upsertFeedback(
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rating, comment: comment ?? null }),
+      body: JSON.stringify(buildFeedbackPayload(rating, comment)),
     },
   );
   if (!res.ok) {

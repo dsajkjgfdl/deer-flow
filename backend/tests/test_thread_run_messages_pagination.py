@@ -35,6 +35,7 @@ def _make_event_store(rows: list[dict]):
     """Return an AsyncMock event store whose list_messages_by_run() returns rows."""
     store = MagicMock()
     store.list_messages_by_run = AsyncMock(return_value=rows)
+    store.list_messages = AsyncMock(return_value=rows)
     return store
 
 
@@ -42,16 +43,17 @@ def _make_feedback_repo(rows: list[dict]):
     """Return an AsyncMock feedback repo whose list_by_run() returns rows."""
     repo = MagicMock()
     repo.list_by_run = AsyncMock(return_value=rows)
+    repo.list_by_thread = AsyncMock(return_value=rows)
     return repo
 
 
-def _make_message(seq: int, event_type: str = "ai_message") -> dict:
+def _make_message(seq: int, event_type: str = "ai_message", content=None) -> dict:
     return {
         "seq": seq,
         "run_id": "run-1",
         "event_type": event_type,
         "category": "message",
-        "content": f"msg-{seq}",
+        "content": content if content is not None else f"msg-{seq}",
     }
 
 
@@ -169,10 +171,10 @@ def test_empty_data_when_no_messages():
 def test_attaches_feedback_to_last_ai_message_for_run():
     """Existing run feedback is attached to the last AI message in the page."""
     rows = [
-        _make_message(1, "llm.human.input"),
-        _make_message(2, "llm.ai.response"),
-        _make_message(3, "tool_message"),
-        _make_message(4, "llm.ai.response"),
+        {**_make_message(1, "llm.human.input"), "run_id": "run-7"},
+        {**_make_message(2, "llm.ai.response"), "run_id": "run-7"},
+        {**_make_message(3, "tool_message"), "run_id": "run-7"},
+        {**_make_message(4, "llm.ai.response"), "run_id": "run-7"},
     ]
     feedback = {
         "feedback_id": "fb-1",
@@ -200,6 +202,137 @@ def test_attaches_feedback_to_last_ai_message_for_run():
     feedback_repo.list_by_run.assert_awaited_once()
     assert feedback_repo.list_by_run.await_args.args[:2] == ("thread-7", "run-7")
     assert "user_id" in feedback_repo.list_by_run.await_args.kwargs
+
+
+def test_run_messages_ignore_message_scoped_feedback_rows():
+    """Only run-level feedback is attached; message-scoped rows are ignored if legacy data exists."""
+    rows = [
+        {
+            **_make_message(
+                1,
+                "llm.human.input",
+                {"id": "human-1", "type": "human", "content": "Q"},
+            ),
+            "run_id": "run-8",
+        },
+        {
+            **_make_message(
+                2,
+                "llm.ai.response",
+                {"id": "ai-1", "type": "ai", "content": "First"},
+            ),
+            "run_id": "run-8",
+        },
+        {
+            **_make_message(
+                3,
+                "llm.ai.response",
+                {"id": "ai-2", "type": "ai", "content": "Final"},
+            ),
+            "run_id": "run-8",
+        },
+    ]
+    feedback_repo = _make_feedback_repo(
+        [
+            {
+                "feedback_id": "fb-run",
+                "thread_id": "thread-8",
+                "run_id": "run-8",
+                "message_id": None,
+                "rating": 1,
+                "comment": None,
+            },
+            {
+                "feedback_id": "fb-message",
+                "thread_id": "thread-8",
+                "run_id": "run-8",
+                "message_id": "ai-1",
+                "rating": -1,
+                "comment": "first answer was wrong",
+            },
+        ]
+    )
+    app = _make_app(event_store=_make_event_store(rows), feedback_repo=feedback_repo)
+
+    with TestClient(app) as client:
+        response = client.get("/api/threads/thread-8/runs/run-8/messages")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"][0]["feedback"] is None
+    assert body["data"][1]["feedback"] is None
+    assert body["data"][2]["feedback"] == {
+        "feedback_id": "fb-run",
+        "rating": 1,
+        "comment": None,
+    }
+
+
+def test_thread_messages_ignore_message_scoped_feedback_rows():
+    """Thread history only uses run-level feedback if legacy message-scoped rows exist."""
+    rows = [
+        {
+            **_make_message(
+                1,
+                "llm.human.input",
+                {"id": "human-1", "type": "human", "content": "Q"},
+            ),
+            "run_id": "run-9",
+        },
+        {
+            **_make_message(
+                2,
+                "llm.ai.response",
+                {"id": "ai-1", "type": "ai", "content": "First"},
+            ),
+            "run_id": "run-9",
+        },
+        {
+            **_make_message(
+                3,
+                "llm.ai.response",
+                {"id": "ai-2", "type": "ai", "content": "Final"},
+            ),
+            "run_id": "run-9",
+        },
+    ]
+    feedback_repo = _make_feedback_repo(
+        [
+            {
+                "feedback_id": "fb-run",
+                "thread_id": "thread-9",
+                "run_id": "run-9",
+                "message_id": None,
+                "rating": 1,
+                "comment": None,
+            },
+            {
+                "feedback_id": "fb-message",
+                "thread_id": "thread-9",
+                "run_id": "run-9",
+                "message_id": "ai-1",
+                "rating": -1,
+                "comment": "first answer was wrong",
+            },
+        ]
+    )
+    app = _make_app(event_store=_make_event_store(rows), feedback_repo=feedback_repo)
+
+    with TestClient(app) as client:
+        response = client.get("/api/threads/thread-9/messages")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body[0]["feedback"] is None
+    assert body[1]["feedback"] is None
+    assert body[2]["feedback"] == {
+        "feedback_id": "fb-run",
+        "rating": 1,
+        "comment": None,
+    }
+    feedback_repo.list_by_thread.assert_awaited_once()
+    assert feedback_repo.list_by_thread.await_args.args[:1] == ("thread-9",)
+    assert "user_id" in feedback_repo.list_by_thread.await_args.kwargs
 
 
 def test_get_run_hydrates_store_only_run():

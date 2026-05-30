@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from deerflow.persistence.feedback.model import FeedbackRow
+from deerflow.persistence.run.model import RunRow
 from deerflow.runtime.user_context import AUTO, _AutoSentinel, resolve_user_id
 from deerflow.utils.time import coerce_iso
 
@@ -36,7 +38,6 @@ class FeedbackRepository:
         thread_id: str,
         rating: int,
         user_id: str | None | _AutoSentinel = AUTO,
-        message_id: str | None = None,
         comment: str | None = None,
     ) -> dict:
         """Create a feedback record. rating must be +1 or -1."""
@@ -48,7 +49,7 @@ class FeedbackRepository:
             run_id=run_id,
             thread_id=thread_id,
             user_id=resolved_user_id,
-            message_id=message_id,
+            message_id=None,
             rating=rating,
             comment=comment,
             created_at=datetime.now(UTC),
@@ -83,7 +84,11 @@ class FeedbackRepository:
         user_id: str | None | _AutoSentinel = AUTO,
     ) -> list[dict]:
         resolved_user_id = resolve_user_id(user_id, method_name="FeedbackRepository.list_by_run")
-        stmt = select(FeedbackRow).where(FeedbackRow.thread_id == thread_id, FeedbackRow.run_id == run_id)
+        stmt = select(FeedbackRow).where(
+            FeedbackRow.thread_id == thread_id,
+            FeedbackRow.run_id == run_id,
+            FeedbackRow.message_id.is_(None),
+        )
         if resolved_user_id is not None:
             stmt = stmt.where(FeedbackRow.user_id == resolved_user_id)
         stmt = stmt.order_by(FeedbackRow.created_at.asc()).limit(limit)
@@ -99,7 +104,10 @@ class FeedbackRepository:
         user_id: str | None | _AutoSentinel = AUTO,
     ) -> list[dict]:
         resolved_user_id = resolve_user_id(user_id, method_name="FeedbackRepository.list_by_thread")
-        stmt = select(FeedbackRow).where(FeedbackRow.thread_id == thread_id)
+        stmt = select(FeedbackRow).where(
+            FeedbackRow.thread_id == thread_id,
+            FeedbackRow.message_id.is_(None),
+        )
         if resolved_user_id is not None:
             stmt = stmt.where(FeedbackRow.user_id == resolved_user_id)
         stmt = stmt.order_by(FeedbackRow.created_at.asc()).limit(limit)
@@ -133,7 +141,7 @@ class FeedbackRepository:
         user_id: str | None | _AutoSentinel = AUTO,
         comment: str | None = None,
     ) -> dict:
-        """Create or update feedback for (thread_id, run_id, user_id). rating must be +1 or -1."""
+        """Create or update feedback for a run."""
         if rating not in (1, -1):
             raise ValueError(f"rating must be +1 or -1, got {rating}")
         resolved_user_id = resolve_user_id(user_id, method_name="FeedbackRepository.upsert")
@@ -142,11 +150,13 @@ class FeedbackRepository:
                 FeedbackRow.thread_id == thread_id,
                 FeedbackRow.run_id == run_id,
                 FeedbackRow.user_id == resolved_user_id,
+                FeedbackRow.message_id.is_(None),
             )
             result = await session.execute(stmt)
             row = result.scalar_one_or_none()
             if row is not None:
                 row.rating = rating
+                row.message_id = None
                 row.comment = comment
                 row.created_at = datetime.now(UTC)
             else:
@@ -155,6 +165,7 @@ class FeedbackRepository:
                     run_id=run_id,
                     thread_id=thread_id,
                     user_id=resolved_user_id,
+                    message_id=None,
                     rating=rating,
                     comment=comment,
                     created_at=datetime.now(UTC),
@@ -171,13 +182,14 @@ class FeedbackRepository:
         run_id: str,
         user_id: str | None | _AutoSentinel = AUTO,
     ) -> bool:
-        """Delete the current user's feedback for a run. Returns True if a record was deleted."""
+        """Delete the current user's run-level feedback."""
         resolved_user_id = resolve_user_id(user_id, method_name="FeedbackRepository.delete_by_run")
         async with self._sf() as session:
             stmt = select(FeedbackRow).where(
                 FeedbackRow.thread_id == thread_id,
                 FeedbackRow.run_id == run_id,
                 FeedbackRow.user_id == resolved_user_id,
+                FeedbackRow.message_id.is_(None),
             )
             result = await session.execute(stmt)
             row = result.scalar_one_or_none()
@@ -195,7 +207,10 @@ class FeedbackRepository:
     ) -> dict[str, dict]:
         """Return feedback grouped by run_id for a thread: {run_id: feedback_dict}."""
         resolved_user_id = resolve_user_id(user_id, method_name="FeedbackRepository.list_by_thread_grouped")
-        stmt = select(FeedbackRow).where(FeedbackRow.thread_id == thread_id)
+        stmt = select(FeedbackRow).where(
+            FeedbackRow.thread_id == thread_id,
+            FeedbackRow.message_id.is_(None),
+        )
         if resolved_user_id is not None:
             stmt = stmt.where(FeedbackRow.user_id == resolved_user_id)
         async with self._sf() as session:
@@ -208,7 +223,11 @@ class FeedbackRepository:
             func.count().label("total"),
             func.coalesce(func.sum(case((FeedbackRow.rating == 1, 1), else_=0)), 0).label("positive"),
             func.coalesce(func.sum(case((FeedbackRow.rating == -1, 1), else_=0)), 0).label("negative"),
-        ).where(FeedbackRow.thread_id == thread_id, FeedbackRow.run_id == run_id)
+        ).where(
+            FeedbackRow.thread_id == thread_id,
+            FeedbackRow.run_id == run_id,
+            FeedbackRow.message_id.is_(None),
+        )
         async with self._sf() as session:
             row = (await session.execute(stmt)).one()
             return {
@@ -217,3 +236,76 @@ class FeedbackRepository:
                 "positive": row.positive,
                 "negative": row.negative,
             }
+
+    async def summarize_for_admin(self) -> dict[str, Any]:
+        """Return global and per-agent feedback summary for admin monitoring."""
+        feedback_stmt = select(FeedbackRow).where(FeedbackRow.message_id.is_(None))
+        run_stmt = select(RunRow)
+        async with self._sf() as session:
+            feedback_rows = list((await session.execute(feedback_stmt)).scalars())
+            run_rows = list((await session.execute(run_stmt)).scalars())
+
+        run_by_id = {row.run_id: row for row in run_rows}
+        summary: dict[str, Any] = {
+            "total": 0,
+            "positive": 0,
+            "negative": 0,
+            "positive_rate": 0,
+            "by_agent": [],
+        }
+        by_agent: dict[str, dict[str, Any]] = {}
+        for feedback in feedback_rows:
+            agent_name = self._agent_name_for_run(run_by_id.get(feedback.run_id))
+            item = by_agent.setdefault(
+                agent_name,
+                {
+                    "agent_name": agent_name,
+                    "total": 0,
+                    "positive": 0,
+                    "negative": 0,
+                    "positive_rate": 0,
+                },
+            )
+            summary["total"] += 1
+            item["total"] += 1
+            if feedback.rating == 1:
+                summary["positive"] += 1
+                item["positive"] += 1
+            elif feedback.rating == -1:
+                summary["negative"] += 1
+                item["negative"] += 1
+
+        summary["positive_rate"] = summary["positive"] / summary["total"] if summary["total"] else 0
+        for item in by_agent.values():
+            item["positive_rate"] = item["positive"] / item["total"] if item["total"] else 0
+        summary["by_agent"] = [by_agent[key] for key in sorted(by_agent)]
+        return summary
+
+    async def recent_for_admin(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        """Return recent feedback rows with agent names for admin monitoring."""
+        feedback_stmt = (
+            select(FeedbackRow)
+            .where(FeedbackRow.message_id.is_(None))
+            .order_by(desc(FeedbackRow.created_at))
+            .limit(limit)
+        )
+        run_stmt = select(RunRow)
+        async with self._sf() as session:
+            feedback_rows = list((await session.execute(feedback_stmt)).scalars())
+            run_rows = list((await session.execute(run_stmt)).scalars())
+
+        run_by_id = {row.run_id: row for row in run_rows}
+        items: list[dict[str, Any]] = []
+        for feedback in feedback_rows:
+            data = self._row_to_dict(feedback)
+            data.pop("message_id", None)
+            data["agent_name"] = self._agent_name_for_run(run_by_id.get(feedback.run_id))
+            items.append(data)
+        return items
+
+    @staticmethod
+    def _agent_name_for_run(run: RunRow | None) -> str:
+        if run is None:
+            return "default"
+        metadata = run.metadata_json if isinstance(run.metadata_json, dict) else {}
+        return str(metadata.get("agent_name") or run.assistant_id or "default")

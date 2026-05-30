@@ -30,6 +30,16 @@ import {
 } from "@/components/ai-elements/reasoning";
 import { Task, TaskTrigger } from "@/components/ai-elements/task";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import {
   deleteFeedback,
   upsertFeedback,
@@ -65,13 +75,15 @@ export function FeedbackButtons({
     initialFeedback,
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [negativeDialogOpen, setNegativeDialogOpen] = useState(false);
+  const [comment, setComment] = useState("");
 
   useEffect(() => {
     setFeedback(initialFeedback);
   }, [initialFeedback]);
 
-  const handleClick = useCallback(
-    async (rating: number) => {
+  const submitFeedback = useCallback(
+    async (rating: number, feedbackComment?: string) => {
       if (isSubmitting) return;
       setIsSubmitting(true);
       try {
@@ -79,7 +91,12 @@ export function FeedbackButtons({
           await deleteFeedback(threadId, runId);
           setFeedback(null);
         } else {
-          const result = await upsertFeedback(threadId, runId, rating);
+          const result = await upsertFeedback(
+            threadId,
+            runId,
+            rating,
+            feedbackComment,
+          );
           setFeedback(result);
         }
       } catch {
@@ -91,37 +108,99 @@ export function FeedbackButtons({
     [threadId, runId, feedback, isSubmitting],
   );
 
+  const handleClick = useCallback(
+    async (rating: number) => {
+      if (rating === -1 && feedback?.rating !== -1) {
+        setComment(feedback?.comment ?? "");
+        setNegativeDialogOpen(true);
+        return;
+      }
+      await submitFeedback(rating);
+    },
+    [feedback, submitFeedback],
+  );
+
+  const handleNegativeSubmit = useCallback(async () => {
+    await submitFeedback(-1, comment);
+    setNegativeDialogOpen(false);
+  }, [comment, submitFeedback]);
+
   return (
-    <div className="flex gap-1">
-      <button
-        type="button"
-        aria-label="Positive feedback"
-        className={cn(
-          "text-muted-foreground hover:text-foreground rounded-md p-1 transition-colors",
-          feedback?.rating === 1 && "text-foreground",
-        )}
-        onClick={() => handleClick(1)}
-        disabled={isSubmitting}
-      >
-        <ThumbsUpIcon
-          className={cn("size-4", feedback?.rating === 1 && "fill-current")}
-        />
-      </button>
-      <button
-        type="button"
-        aria-label="Negative feedback"
-        className={cn(
-          "text-muted-foreground hover:text-foreground rounded-md p-1 transition-colors",
-          feedback?.rating === -1 && "text-foreground",
-        )}
-        onClick={() => handleClick(-1)}
-        disabled={isSubmitting}
-      >
-        <ThumbsDownIcon
-          className={cn("size-4", feedback?.rating === -1 && "fill-current")}
-        />
-      </button>
-    </div>
+    <>
+      <div className="flex gap-1">
+        <button
+          type="button"
+          aria-label="Positive feedback"
+          className={cn(
+            "text-muted-foreground hover:text-foreground rounded-md p-1 transition-colors",
+            feedback?.rating === 1 && "text-foreground",
+          )}
+          onClick={() => handleClick(1)}
+          disabled={isSubmitting}
+        >
+          <ThumbsUpIcon
+            className={cn("size-4", feedback?.rating === 1 && "fill-current")}
+          />
+        </button>
+        <button
+          type="button"
+          aria-label="Negative feedback"
+          className={cn(
+            "text-muted-foreground hover:text-foreground rounded-md p-1 transition-colors",
+            feedback?.rating === -1 && "text-foreground",
+          )}
+          onClick={() => handleClick(-1)}
+          disabled={isSubmitting}
+        >
+          <ThumbsDownIcon
+            className={cn(
+              "size-4",
+              feedback?.rating === -1 && "fill-current",
+            )}
+          />
+        </button>
+      </div>
+      <Dialog open={negativeDialogOpen} onOpenChange={setNegativeDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Share feedback</DialogTitle>
+            <DialogDescription>
+              Add a short note about what should be improved.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={comment}
+            onChange={(event) => setComment(event.target.value)}
+            placeholder="What went wrong?"
+            className="min-h-24 resize-none"
+          />
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setNegativeDialogOpen(false)}
+              disabled={isSubmitting}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={handleNegativeSubmit}
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? (
+                <>
+                  <Loader2Icon className="size-4 animate-spin" />
+                  Saving
+                </>
+              ) : (
+                "Submit"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

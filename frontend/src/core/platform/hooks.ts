@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  fetchFeedbackSummary,
+  fetchRecentFeedback,
   grantUserAgent,
   listAdminAudit,
   listAgentCatalog,
@@ -121,4 +123,30 @@ export function useToolMonitoring() {
     isLoading,
     error,
   };
+}
+
+export function useFeedbackSummary() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["platform", "admin", "feedback", "summary"],
+    queryFn: () => fetchFeedbackSummary(),
+  });
+  return {
+    summary: data ?? {
+      total: 0,
+      positive: 0,
+      negative: 0,
+      positive_rate: 0,
+      by_agent: [],
+    },
+    isLoading,
+    error,
+  };
+}
+
+export function useRecentFeedback(limit = 20) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["platform", "admin", "feedback", "recent", limit],
+    queryFn: () => fetchRecentFeedback(limit),
+  });
+  return { items: data?.items ?? [], isLoading, error };
 }

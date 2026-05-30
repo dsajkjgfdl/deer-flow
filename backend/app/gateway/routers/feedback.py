@@ -27,7 +27,6 @@ router = APIRouter(prefix="/api/threads", tags=["feedback"])
 class FeedbackCreateRequest(BaseModel):
     rating: int = Field(..., description="Feedback rating: +1 (positive) or -1 (negative)")
     comment: str | None = Field(default=None, description="Optional text feedback")
-    message_id: str | None = Field(default=None, description="Optional: scope feedback to a specific message")
 
 
 class FeedbackUpsertRequest(BaseModel):
@@ -40,7 +39,6 @@ class FeedbackResponse(BaseModel):
     run_id: str
     thread_id: str
     user_id: str | None = None
-    message_id: str | None = None
     rating: int
     comment: str | None = None
     created_at: str = ""
@@ -137,7 +135,6 @@ async def create_feedback(
         thread_id=thread_id,
         rating=body.rating,
         user_id=user_id,
-        message_id=body.message_id,
         comment=body.comment,
     )
 

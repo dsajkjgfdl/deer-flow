@@ -45,6 +45,39 @@ def _feedback_payload(feedback: dict | None) -> dict | None:
     }
 
 
+def _attach_feedback_to_messages(
+    messages: list[dict],
+    feedback_rows: list[dict],
+) -> None:
+    run_feedback_by_run: dict[str, dict] = {}
+    for feedback in feedback_rows:
+        run_id = feedback.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            continue
+        if feedback.get("message_id"):
+            continue
+        if run_id not in run_feedback_by_run:
+            run_feedback_by_run[run_id] = feedback
+
+    last_ai_per_run: dict[str, int] = {}
+    for i, message in enumerate(messages):
+        message["feedback"] = None
+        if not _is_ai_message_event(message):
+            continue
+
+        run_id = message.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            continue
+
+        last_ai_per_run[run_id] = i
+
+    for run_id, index in last_ai_per_run.items():
+        if messages[index].get("feedback") is None:
+            messages[index]["feedback"] = _feedback_payload(
+                run_feedback_by_run.get(run_id)
+            )
+
+
 # ---------------------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------------------
@@ -359,26 +392,10 @@ async def list_thread_messages(
     event_store = get_run_event_store(request)
     messages = await event_store.list_messages(thread_id, limit=limit, before_seq=before_seq, after_seq=after_seq)
 
-    # Attach feedback to the last AI message of each run
     feedback_repo = get_feedback_repo(request)
     user_id = await get_current_user(request)
-    feedback_map = await feedback_repo.list_by_thread_grouped(thread_id, user_id=user_id)
-
-    # Find the last AI response per run_id
-    last_ai_per_run: dict[str, int] = {}  # run_id -> index in messages list
-    for i, msg in enumerate(messages):
-        if _is_ai_message_event(msg):
-            last_ai_per_run[msg["run_id"]] = i
-
-    # Attach feedback field
-    last_ai_indices = set(last_ai_per_run.values())
-    for i, msg in enumerate(messages):
-        if i in last_ai_indices:
-            run_id = msg["run_id"]
-            fb = feedback_map.get(run_id)
-            msg["feedback"] = _feedback_payload(fb)
-        else:
-            msg["feedback"] = None
+    feedback_rows = await feedback_repo.list_by_thread(thread_id, user_id=user_id)
+    _attach_feedback_to_messages(messages, feedback_rows)
 
     return messages
 
@@ -411,16 +428,7 @@ async def list_run_messages(
     feedback_repo = get_feedback_repo(request)
     user_id = await get_current_user(request)
     feedback_rows = await feedback_repo.list_by_run(thread_id, run_id, user_id=user_id)
-    feedback = feedback_rows[0] if feedback_rows else None
-
-    last_ai_index: int | None = None
-    for i, msg in enumerate(data):
-        msg["feedback"] = None
-        if _is_ai_message_event(msg):
-            last_ai_index = i
-
-    if last_ai_index is not None:
-        data[last_ai_index]["feedback"] = _feedback_payload(feedback)
+    _attach_feedback_to_messages(data, feedback_rows)
 
     return {"data": data, "has_more": has_more}
 

@@ -77,6 +77,39 @@ class FakePlatformRepo:
         return []
 
 
+class FakeFeedbackRepo:
+    async def summarize_for_admin(self) -> dict:
+        return {
+            "total": 3,
+            "positive": 2,
+            "negative": 1,
+            "positive_rate": 2 / 3,
+            "by_agent": [
+                {
+                    "agent_name": "hr-boss-agent",
+                    "total": 3,
+                    "positive": 2,
+                    "negative": 1,
+                    "positive_rate": 2 / 3,
+                }
+            ],
+        }
+
+    async def recent_for_admin(self, *, limit: int = 20) -> list[dict]:
+        return [
+            {
+                "feedback_id": "fb-1",
+                "thread_id": "thread-1",
+                "run_id": "run-1",
+                "user_id": "user-1",
+                "agent_name": "hr-boss-agent",
+                "rating": -1,
+                "comment": "wrong data",
+                "created_at": "2026-05-29T00:00:00+00:00",
+            }
+        ][:limit]
+
+
 class FakeLocalProvider:
     def __init__(self) -> None:
         self.users = [
@@ -174,6 +207,53 @@ def test_admin_assignment_rejects_invalid_agent(monkeypatch):
 
     assert response.status_code == 400
     assert "invalid" in response.json()["detail"]
+
+
+def test_admin_feedback_routes_return_summary_and_recent():
+    from app.gateway.routers import platform_admin
+
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = FakePlatformRepo()
+    app.state.feedback_repo = FakeFeedbackRepo()
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        summary = client.get("/api/platform/admin/feedback/summary")
+        recent = client.get("/api/platform/admin/feedback/recent?limit=1")
+
+    assert summary.status_code == 200
+    assert summary.json()["total"] == 3
+    assert summary.json()["positive"] == 2
+    assert summary.json()["negative"] == 1
+    assert summary.json()["by_agent"][0]["agent_name"] == "hr-boss-agent"
+
+    assert recent.status_code == 200
+    assert recent.json()["items"] == [
+        {
+            "feedback_id": "fb-1",
+            "thread_id": "thread-1",
+            "run_id": "run-1",
+            "user_id": "user-1",
+            "agent_name": "hr-boss-agent",
+            "rating": -1,
+            "comment": "wrong data",
+            "created_at": "2026-05-29T00:00:00+00:00",
+        }
+    ]
+
+
+def test_feedback_admin_routes_reject_normal_user():
+    from app.gateway.routers import platform_admin
+
+    app = make_authed_test_app(user_factory=lambda: _user("user"))
+    app.state.platform_repo = FakePlatformRepo()
+    app.state.feedback_repo = FakeFeedbackRepo()
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        response = client.get("/api/platform/admin/feedback/summary")
+
+    assert response.status_code == 403
 
 
 def test_user_platform_agents_routes_only_return_assigned_agents(monkeypatch):

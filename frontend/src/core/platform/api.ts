@@ -5,6 +5,8 @@ import type {
   AdminAuditItem,
   AgentCatalogEntry,
   AssignmentMutationResult,
+  FeedbackRecord,
+  FeedbackSummary,
   PlatformAgent,
   PlatformUsersPage,
   RunMonitoringItem,
@@ -132,4 +134,26 @@ export async function listToolMonitoring(): Promise<{
     items: ToolMonitoringItem[];
     recent_failures: ToolFailureItem[];
   }>(res, `Failed to load tool monitoring: ${res.statusText}`);
+}
+
+export async function fetchFeedbackSummary(): Promise<FeedbackSummary> {
+  const res = await fetch(
+    `${getBackendBaseURL()}/api/platform/admin/feedback/summary`,
+  );
+  return readJsonOrThrow<FeedbackSummary>(
+    res,
+    `Failed to load feedback summary: ${res.statusText}`,
+  );
+}
+
+export async function fetchRecentFeedback(
+  limit = 20,
+): Promise<{ items: FeedbackRecord[] }> {
+  const res = await fetch(
+    `${getBackendBaseURL()}/api/platform/admin/feedback/recent?limit=${limit}`,
+  );
+  return readJsonOrThrow<{ items: FeedbackRecord[] }>(
+    res,
+    `Failed to load recent feedback: ${res.statusText}`,
+  );
 }

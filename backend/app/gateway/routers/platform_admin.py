@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.gateway.authz import require_admin
-from app.gateway.deps import get_local_provider
+from app.gateway.deps import get_feedback_repo, get_local_provider
 from deerflow.agents.catalog import AgentCatalogEntry, scan_agent_catalog
 
 router = APIRouter(prefix="/api/platform/admin", tags=["platform-admin"])
@@ -59,6 +59,10 @@ class RunMonitoringResponse(BaseModel):
 class ToolMonitoringResponse(BaseModel):
     items: list[dict[str, Any]]
     recent_failures: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class RecentFeedbackResponse(BaseModel):
+    items: list[dict[str, Any]]
 
 
 def _platform_repo(request: Request):
@@ -172,3 +176,18 @@ async def summarize_tools(request: Request, failure_limit: int = Query(default=2
         items=await repo.summarize_tools_by_agent(),
         recent_failures=await repo.recent_tool_failures(limit=failure_limit),
     )
+
+
+@router.get("/feedback/summary")
+@require_admin
+async def feedback_summary(request: Request) -> dict[str, Any]:
+    return await get_feedback_repo(request).summarize_for_admin()
+
+
+@router.get("/feedback/recent", response_model=RecentFeedbackResponse)
+@require_admin
+async def recent_feedback(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+) -> RecentFeedbackResponse:
+    return RecentFeedbackResponse(items=await get_feedback_repo(request).recent_for_admin(limit=limit))

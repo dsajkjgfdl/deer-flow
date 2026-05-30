@@ -1,7 +1,10 @@
 import type { Message } from "@langchain/langgraph-sdk";
 import { expect, test } from "vitest";
 
-import { getAssistantFeedbackTarget } from "@/core/messages/feedback";
+import {
+  buildFeedbackPayload,
+  getAssistantFeedbackTarget,
+} from "@/core/messages/feedback";
 import type { ThreadDisplayMessage } from "@/core/threads/types";
 
 test("getAssistantFeedbackTarget returns the latest assistant message with run metadata", () => {
@@ -43,4 +46,26 @@ test("getAssistantFeedbackTarget ignores assistant messages without run metadata
   ];
 
   expect(getAssistantFeedbackTarget(messages)).toBeNull();
+});
+
+test("buildFeedbackPayload includes trimmed comment text", () => {
+  expect(buildFeedbackPayload(1, " useful answer ")).toEqual({
+    rating: 1,
+    comment: "useful answer",
+  });
+  expect(buildFeedbackPayload(-1, "wrong data")).toEqual({
+    rating: -1,
+    comment: "wrong data",
+  });
+});
+
+test("buildFeedbackPayload normalizes empty comments to null", () => {
+  expect(buildFeedbackPayload(-1, "   ")).toEqual({
+    rating: -1,
+    comment: null,
+  });
+  expect(buildFeedbackPayload(1)).toEqual({
+    rating: 1,
+    comment: null,
+  });
 });

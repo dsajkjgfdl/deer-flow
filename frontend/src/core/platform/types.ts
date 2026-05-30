@@ -100,3 +100,30 @@ export interface ToolFailureItem {
   metadata_json?: Record<string, unknown>;
   created_at?: string;
 }
+
+export interface FeedbackAgentSummary {
+  agent_name: string;
+  total: number;
+  positive: number;
+  negative: number;
+  positive_rate: number;
+}
+
+export interface FeedbackSummary {
+  total: number;
+  positive: number;
+  negative: number;
+  positive_rate: number;
+  by_agent: FeedbackAgentSummary[];
+}
+
+export interface FeedbackRecord {
+  feedback_id: string;
+  thread_id: string;
+  run_id: string;
+  user_id: string | null;
+  agent_name: string;
+  rating: number;
+  comment: string | null;
+  created_at?: string;
+}
