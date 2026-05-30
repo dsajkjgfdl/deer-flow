@@ -2,9 +2,11 @@ import type { Message } from "@langchain/langgraph-sdk";
 import { expect, test } from "vitest";
 
 import {
+  applyCurrentRunMetadata,
   getVisibleOptimisticMessages,
   mergeMessages,
 } from "@/core/threads/hooks";
+import { getAssistantFeedbackTarget } from "@/core/messages/feedback";
 
 test("mergeMessages removes duplicate messages already present in history", () => {
   const human = {
@@ -78,6 +80,71 @@ test("mergeMessages preserves feedback metadata when live messages replace histo
       },
     },
   ]);
+});
+
+test("applyCurrentRunMetadata annotates live messages created after the stream baseline", () => {
+  const previousAi = {
+    id: "ai-previous",
+    type: "ai",
+    content: "previous answer",
+  } as Message;
+  const currentAi = {
+    id: "ai-current",
+    type: "ai",
+    content: "current answer",
+  } as Message;
+
+  const messages = applyCurrentRunMetadata(
+    [previousAi, currentAi],
+    "run-current",
+    new Set(["message:ai-previous"]),
+  );
+
+  expect(messages).toEqual([
+    previousAi,
+    {
+      ...currentAi,
+      run_id: "run-current",
+      feedback: null,
+    },
+  ]);
+  expect(getAssistantFeedbackTarget(messages)).toEqual({
+    runId: "run-current",
+    feedback: null,
+  });
+});
+
+test("applyCurrentRunMetadata preserves current run messages after token baseline reset", () => {
+  const previousAi = {
+    id: "ai-previous",
+    type: "ai",
+    content: "previous answer",
+  } as Message;
+  const currentAi = {
+    id: "ai-current",
+    type: "ai",
+    content: "current answer",
+  } as Message;
+
+  const messages = applyCurrentRunMetadata(
+    [previousAi, currentAi],
+    "run-current",
+    new Set(["message:ai-previous", "message:ai-current"]),
+    new Set(["message:ai-current"]),
+  );
+
+  expect(messages).toEqual([
+    previousAi,
+    {
+      ...currentAi,
+      run_id: "run-current",
+      feedback: null,
+    },
+  ]);
+  expect(getAssistantFeedbackTarget(messages)).toEqual({
+    runId: "run-current",
+    feedback: null,
+  });
 });
 
 test("mergeMessages deduplicates tool messages by tool_call_id", () => {

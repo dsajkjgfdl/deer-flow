@@ -68,6 +68,12 @@ function messageIdentity(message: Message): string | undefined {
   return undefined;
 }
 
+function getMessageIdentitySet(messages: Message[]): Set<string> {
+  return new Set(
+    messages.map(messageIdentity).filter((id): id is string => Boolean(id)),
+  );
+}
+
 function dedupeMessagesByIdentity(messages: Message[]): Message[] {
   const lastIndexByIdentity = new Map<string, number>();
 
@@ -99,6 +105,55 @@ function mergeDisplayMetadata(
     run_id: current.run_id ?? history.run_id,
     feedback: current.feedback ?? history.feedback ?? null,
   } as ThreadDisplayMessage;
+}
+
+export function applyCurrentRunMetadata(
+  messages: Message[],
+  runId: string | null | undefined,
+  baselineMessageIdentities: ReadonlySet<string>,
+  currentRunMessageIdentities?: ReadonlySet<string>,
+): Message[] {
+  if (!runId) {
+    return messages;
+  }
+
+  return messages.map((message) => {
+    const current = message as ThreadDisplayMessage;
+    if (isNonEmptyString(current.run_id)) {
+      return message;
+    }
+
+    const identity = messageIdentity(message);
+    const belongsToCurrentRun = currentRunMessageIdentities
+      ? identity !== undefined && currentRunMessageIdentities.has(identity)
+      : identity !== undefined && !baselineMessageIdentities.has(identity);
+
+    if (!belongsToCurrentRun) {
+      return message;
+    }
+
+    return {
+      ...message,
+      run_id: runId,
+      feedback: current.feedback ?? null,
+    } as ThreadDisplayMessage;
+  });
+}
+
+function collectCurrentRunMessageIdentities(
+  messages: Message[],
+  baselineMessageIdentities: ReadonlySet<string>,
+  currentRunMessageIdentities: ReadonlySet<string>,
+): Set<string> {
+  const next = new Set(currentRunMessageIdentities);
+  for (const message of messages) {
+    const identity = messageIdentity(message);
+    if (!identity || baselineMessageIdentities.has(identity)) {
+      continue;
+    }
+    next.add(identity);
+  }
+  return next;
 }
 
 function findLatestUnloadedRunIndex(
@@ -220,11 +275,14 @@ export function useThreadStream({
   const { t } = useI18n();
   // Track the thread ID that is currently streaming to handle thread changes during streaming
   const [onStreamThreadId, setOnStreamThreadId] = useState(() => threadId);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   // Ref to track current thread ID across async callbacks without causing re-renders,
   // and to allow access to the current thread id in onUpdateEvent
   const threadIdRef = useRef<string | null>(threadId ?? null);
   const startedRef = useRef(false);
   const pendingUsageBaselineMessageIdsRef = useRef<Set<string>>(new Set());
+  const currentRunBaselineMessageIdsRef = useRef<Set<string>>(new Set());
+  const currentRunMessageIdsRef = useRef<Set<string>>(new Set());
   const listeners = useRef({
     onSend,
     onStart,
@@ -247,6 +305,13 @@ export function useThreadStream({
 
   useEffect(() => {
     const normalizedThreadId = threadId ?? null;
+    const previousThreadId = threadIdRef.current;
+    if (normalizedThreadId !== previousThreadId) {
+      setActiveRunId(null);
+      currentRunBaselineMessageIdsRef.current = new Set();
+      currentRunMessageIdsRef.current = new Set();
+    }
+
     if (!normalizedThreadId) {
       // Reset when the UI moves back to a brand new unsaved thread.
       startedRef.current = false;
@@ -259,6 +324,13 @@ export function useThreadStream({
 
   const handleStreamStart = useCallback((_threadId: string, _runId: string) => {
     threadIdRef.current = _threadId;
+    setActiveRunId(_runId);
+    currentRunMessageIdsRef.current = new Set();
+    if (currentRunBaselineMessageIdsRef.current.size === 0) {
+      currentRunBaselineMessageIdsRef.current = getMessageIdentitySet(
+        messagesRef.current,
+      );
+    }
     if (!startedRef.current) {
       listeners.current.onStart?.(_threadId, _runId);
       startedRef.current = true;
@@ -382,11 +454,13 @@ export function useThreadStream({
     onError(error) {
       setOptimisticMessages([]);
       toast.error(getStreamErrorMessage(error));
-      pendingUsageBaselineMessageIdsRef.current = new Set(
-        messagesRef.current
-          .map(messageIdentity)
-          .filter((id): id is string => Boolean(id)),
+      pendingUsageBaselineMessageIdsRef.current = getMessageIdentitySet(
+        messagesRef.current,
       );
+      currentRunBaselineMessageIdsRef.current = getMessageIdentitySet(
+        messagesRef.current,
+      );
+      currentRunMessageIdsRef.current = new Set();
       if (threadIdRef.current && !isMock) {
         void queryClient.invalidateQueries({
           queryKey: threadTokenUsageQueryKey(threadIdRef.current),
@@ -395,10 +469,8 @@ export function useThreadStream({
     },
     onFinish(state) {
       listeners.current.onFinish?.(state.values);
-      pendingUsageBaselineMessageIdsRef.current = new Set(
-        messagesRef.current
-          .map(messageIdentity)
-          .filter((id): id is string => Boolean(id)),
+      pendingUsageBaselineMessageIdsRef.current = getMessageIdentitySet(
+        messagesRef.current,
       );
       void queryClient.invalidateQueries({ queryKey: ["threads", "search"] });
       if (threadIdRef.current && !isMock) {
@@ -436,11 +508,11 @@ export function useThreadStream({
   useEffect(() => {
     startedRef.current = false;
     sendInFlightRef.current = false;
-    pendingUsageBaselineMessageIdsRef.current = new Set(
-      messagesRef.current
-        .map(messageIdentity)
-        .filter((id): id is string => Boolean(id)),
+    pendingUsageBaselineMessageIdsRef.current = getMessageIdentitySet(
+      messagesRef.current,
     );
+    currentRunBaselineMessageIdsRef.current = new Set();
+    currentRunMessageIdsRef.current = new Set();
     prevHumanMsgCountRef.current =
       latestMessageCountsRef.current.humanMessageCount;
   }, [threadId]);
@@ -453,10 +525,16 @@ export function useThreadStream({
       thread.isLoading &&
       pendingUsageBaselineMessageIdsRef.current.size === 0
     ) {
-      pendingUsageBaselineMessageIdsRef.current = new Set(
-        thread.messages
-          .map(messageIdentity)
-          .filter((id): id is string => Boolean(id)),
+      pendingUsageBaselineMessageIdsRef.current = getMessageIdentitySet(
+        thread.messages,
+      );
+    }
+    if (
+      thread.isLoading &&
+      currentRunBaselineMessageIdsRef.current.size === 0
+    ) {
+      currentRunBaselineMessageIdsRef.current = getMessageIdentitySet(
+        thread.messages,
       );
     }
   }, [thread.isLoading, thread.messages]);
@@ -495,11 +573,10 @@ export function useThreadStream({
       // Capture the current human message count before showing optimistic
       // messages so we can wait for the server's copy of the user input.
       prevHumanMsgCountRef.current = humanMessageCount;
-      pendingUsageBaselineMessageIdsRef.current = new Set(
-        thread.messages
-          .map(messageIdentity)
-          .filter((id): id is string => Boolean(id)),
-      );
+      const messageBaseline = getMessageIdentitySet(thread.messages);
+      pendingUsageBaselineMessageIdsRef.current = messageBaseline;
+      currentRunBaselineMessageIdsRef.current = messageBaseline;
+      currentRunMessageIdsRef.current = new Set();
 
       // Build optimistic files list with uploading status
       const optimisticFiles: FileInMessage[] = (message.files ?? []).map(
@@ -685,10 +762,24 @@ export function useThreadStream({
     prevHumanMsgCountRef.current,
     humanMessageCount,
   );
+  const currentRunMessageIds = activeRunId
+    ? collectCurrentRunMessageIdentities(
+        thread.messages,
+        currentRunBaselineMessageIdsRef.current,
+        currentRunMessageIdsRef.current,
+      )
+    : new Set<string>();
+  currentRunMessageIdsRef.current = currentRunMessageIds;
+  const threadMessagesWithCurrentRunMetadata = applyCurrentRunMetadata(
+    thread.messages,
+    activeRunId,
+    currentRunBaselineMessageIdsRef.current,
+    currentRunMessageIds,
+  );
 
   const mergedMessages = mergeMessages(
     history,
-    thread.messages,
+    threadMessagesWithCurrentRunMetadata,
     visibleOptimisticMessages,
   );
   const pendingUsageMessages = thread.isLoading
