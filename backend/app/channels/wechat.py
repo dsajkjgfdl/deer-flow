@@ -132,6 +132,7 @@ class WechatChannel(Channel):
     Configuration keys (in ``config.yaml`` under ``channels.wechat``):
         - ``bot_token``: iLink bot token used for authenticated API calls.
         - ``qrcode_login_enabled``: (optional) Allow first-time QR bootstrap when ``bot_token`` is missing.
+        - ``qrcode_status_timeout``: (optional) Timeout for each QR status check.
         - ``base_url``: (optional) iLink API base URL.
         - ``allowed_users``: (optional) List of allowed iLink user IDs. Empty = allow all.
         - ``polling_timeout``: (optional) Long-poll timeout in seconds. Default: 35.
@@ -145,6 +146,7 @@ class WechatChannel(Channel):
     DEFAULT_RETRY_DELAY = 5.0
     DEFAULT_QRCODE_POLL_INTERVAL = 2.0
     DEFAULT_QRCODE_POLL_TIMEOUT = 180.0
+    DEFAULT_QRCODE_STATUS_TIMEOUT = 30.0
     DEFAULT_QRCODE_BOT_TYPE = 3
     DEFAULT_API_TIMEOUT = 15.0
     DEFAULT_CONFIG_TIMEOUT = 10.0
@@ -229,6 +231,7 @@ class WechatChannel(Channel):
         self._retry_delay = self._coerce_float(config.get("polling_retry_delay"), self.DEFAULT_RETRY_DELAY)
         self._qrcode_poll_interval = self._coerce_float(config.get("qrcode_poll_interval"), self.DEFAULT_QRCODE_POLL_INTERVAL)
         self._qrcode_poll_timeout = self._coerce_float(config.get("qrcode_poll_timeout"), self.DEFAULT_QRCODE_POLL_TIMEOUT)
+        self._qrcode_status_timeout = self._coerce_float(config.get("qrcode_status_timeout"), self.DEFAULT_QRCODE_STATUS_TIMEOUT)
         self._qrcode_login_enabled = bool(config.get("qrcode_login_enabled", False))
         self._qrcode_bot_type = self._coerce_int(config.get("qrcode_bot_type"), self.DEFAULT_QRCODE_BOT_TYPE)
         self._ilink_app_id = str(config.get("ilink_app_id") or "").strip()
@@ -674,10 +677,19 @@ class WechatChannel(Channel):
 
         deadline = time.monotonic() + max(self._qrcode_poll_timeout, 1.0)
         while time.monotonic() < deadline:
-            status_data = await self._request_public_get_json(
-                "/ilink/bot/get_qrcode_status",
-                params={"qrcode": qrcode},
-            )
+            try:
+                status_data = await self._request_public_get_json(
+                    "/ilink/bot/get_qrcode_status",
+                    params={"qrcode": qrcode},
+                    timeout=max(self._qrcode_status_timeout, 1.0),
+                )
+            except httpx.TimeoutException:
+                logger.warning(
+                    "[WeChat] QR status check timed out; continuing to poll same qrcode=%s",
+                    qrcode,
+                )
+                await asyncio.sleep(max(self._qrcode_poll_interval, 0.1))
+                continue
             status = str(status_data.get("status") or "").strip().lower()
             if status == "confirmed":
                 token = str(status_data.get("bot_token") or "").strip()

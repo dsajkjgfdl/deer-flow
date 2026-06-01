@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from app.channels.message_bus import InboundMessageType, MessageBus, OutboundMessage
 
 
@@ -69,6 +71,8 @@ class _MockAsyncClient:
         if self._get_calls is not None:
             self._get_calls.append({"url": url, "params": params or {}, "headers": headers or {}, **kwargs})
         payload = self._get_responses.pop(0) if self._get_responses else {"ret": 0}
+        if isinstance(payload, Exception):
+            raise payload
         return _MockResponse(payload)
 
     async def put(self, url: str, content: bytes, headers: dict[str, Any] | None = None, **kwargs):
@@ -1249,5 +1253,46 @@ def test_qrcode_login_binds_and_persists_auth_state(monkeypatch, tmp_path: Path)
         assert auth_state["status"] == "confirmed"
         assert auth_state["bot_token"] == "bound-token"
         assert auth_state["ilink_bot_id"] == "bot-99"
+
+    _run(go())
+
+
+def test_qrcode_login_continues_after_status_read_timeout(monkeypatch, tmp_path: Path):
+    from app.channels.wechat import WechatChannel
+
+    async def go():
+        get_calls: list[dict[str, Any]] = []
+
+        def _client_factory(*args, **kwargs):
+            return _MockAsyncClient(
+                get_calls=get_calls,
+                get_responses=[
+                    {"qrcode": "qr-123"},
+                    httpx.ReadTimeout("status timed out"),
+                    {"status": "confirmed", "bot_token": "bound-token", "ilink_bot_id": "bot-99"},
+                ],
+                **kwargs,
+            )
+
+        monkeypatch.setattr("app.channels.wechat.httpx.AsyncClient", _client_factory)
+
+        channel = WechatChannel(
+            bus=MessageBus(),
+            config={
+                "state_dir": str(tmp_path / "wechat-state"),
+                "qrcode_login_enabled": True,
+                "qrcode_poll_interval": 0.01,
+                "qrcode_poll_timeout": 1,
+                "qrcode_status_timeout": 1.25,
+            },
+        )
+
+        ok = await channel._ensure_authenticated()
+
+        assert ok is True
+        assert channel._bot_token == "bound-token"
+        assert get_calls[1]["url"].endswith("/ilink/bot/get_qrcode_status")
+        assert get_calls[1]["timeout"] == 1.25
+        assert get_calls[2]["url"].endswith("/ilink/bot/get_qrcode_status")
 
     _run(go())
