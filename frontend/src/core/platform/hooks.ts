@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  fetchFeedbackConversation,
   fetchFeedbackSummary,
   fetchRecentFeedback,
   grantUserAgent,
@@ -149,4 +150,13 @@ export function useRecentFeedback(limit = 20) {
     queryFn: () => fetchRecentFeedback(limit),
   });
   return { items: data?.items ?? [], isLoading, error };
+}
+
+export function useFeedbackConversation(feedbackId: string | null) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["platform", "admin", "feedback", feedbackId, "conversation"],
+    queryFn: () => fetchFeedbackConversation(feedbackId!),
+    enabled: Boolean(feedbackId),
+  });
+  return { conversation: data ?? null, isLoading, error };
 }

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from inspect import signature
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.gateway.authz import require_admin
-from app.gateway.deps import get_feedback_repo, get_local_provider
+from app.gateway.deps import get_feedback_repo, get_local_provider, get_run_event_store
 from deerflow.agents.catalog import AgentCatalogEntry, scan_agent_catalog
 
 router = APIRouter(prefix="/api/platform/admin", tags=["platform-admin"])
@@ -65,6 +66,11 @@ class RecentFeedbackResponse(BaseModel):
     items: list[dict[str, Any]]
 
 
+class FeedbackConversationResponse(BaseModel):
+    feedback: dict[str, Any]
+    messages: list[dict[str, Any]]
+
+
 def _platform_repo(request: Request):
     repo = getattr(request.app.state, "platform_repo", None)
     if repo is None:
@@ -93,6 +99,72 @@ def _assignable_agent(agent_name: str) -> AgentCatalogEntry:
     if entry.status == "invalid":
         raise HTTPException(status_code=400, detail=f"Agent '{agent_name}' is invalid: {entry.validation_errors}")
     return entry
+
+
+async def _with_feedback_user_email(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    provider = get_local_provider()
+    user_cache: dict[str, Any] = {}
+    enriched: list[dict[str, Any]] = []
+    for item in items:
+        data = dict(item)
+        user_id = data.get("user_id")
+        user_email = None
+        if user_id:
+            user_id_text = str(user_id)
+            if user_id_text not in user_cache:
+                user_cache[user_id_text] = await provider.get_user(user_id_text)
+            user = user_cache[user_id_text]
+            user_email = getattr(user, "email", None) if user is not None else None
+        data["user_email"] = user_email
+        enriched.append(data)
+    return enriched
+
+
+async def _list_run_messages_for_admin(
+    request: Request,
+    *,
+    thread_id: str,
+    run_id: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    event_store = get_run_event_store(request)
+    kwargs: dict[str, Any] = {"limit": limit}
+    if "user_id" in signature(event_store.list_messages_by_run).parameters:
+        kwargs["user_id"] = None
+    return await event_store.list_messages_by_run(thread_id, run_id, **kwargs)
+
+
+def _messages_from_feedback_summary(feedback: dict[str, Any]) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    thread_id = str(feedback["thread_id"])
+    run_id = str(feedback["run_id"])
+    first_human_message = feedback.get("first_human_message")
+    if first_human_message:
+        messages.append(
+            {
+                "thread_id": thread_id,
+                "run_id": run_id,
+                "event_type": "human_message",
+                "category": "message",
+                "content": {"type": "human", "content": str(first_human_message)},
+                "metadata": {"source": "run_summary"},
+                "seq": 1,
+            }
+        )
+    last_ai_message = feedback.get("last_ai_message")
+    if last_ai_message:
+        messages.append(
+            {
+                "thread_id": thread_id,
+                "run_id": run_id,
+                "event_type": "ai_message",
+                "category": "message",
+                "content": {"type": "ai", "content": str(last_ai_message)},
+                "metadata": {"source": "run_summary"},
+                "seq": len(messages) + 1,
+            }
+        )
+    return messages
 
 
 @router.get("/agents/catalog", response_model=AgentCatalogResponse)
@@ -190,4 +262,27 @@ async def recent_feedback(
     request: Request,
     limit: int = Query(default=20, ge=1, le=100),
 ) -> RecentFeedbackResponse:
-    return RecentFeedbackResponse(items=await get_feedback_repo(request).recent_for_admin(limit=limit))
+    items = await get_feedback_repo(request).recent_for_admin(limit=limit)
+    return RecentFeedbackResponse(items=await _with_feedback_user_email(items))
+
+
+@router.get("/feedback/{feedback_id}/conversation", response_model=FeedbackConversationResponse)
+@require_admin
+async def feedback_conversation(
+    feedback_id: str,
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> FeedbackConversationResponse:
+    feedback = await get_feedback_repo(request).get_for_admin(feedback_id)
+    if feedback is None:
+        raise HTTPException(status_code=404, detail="Feedback not found")
+    enriched = await _with_feedback_user_email([feedback])
+    messages = await _list_run_messages_for_admin(
+        request,
+        thread_id=str(feedback["thread_id"]),
+        run_id=str(feedback["run_id"]),
+        limit=limit,
+    )
+    if not messages:
+        messages = _messages_from_feedback_summary(feedback)
+    return FeedbackConversationResponse(feedback=enriched[0], messages=messages)

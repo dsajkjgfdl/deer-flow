@@ -5,6 +5,7 @@ import type {
   AdminAuditItem,
   AgentCatalogEntry,
   AssignmentMutationResult,
+  FeedbackConversation,
   FeedbackRecord,
   FeedbackSummary,
   PlatformAgent,
@@ -155,5 +156,19 @@ export async function fetchRecentFeedback(
   return readJsonOrThrow<{ items: FeedbackRecord[] }>(
     res,
     `Failed to load recent feedback: ${res.statusText}`,
+  );
+}
+
+export async function fetchFeedbackConversation(
+  feedbackId: string,
+  limit = 100,
+): Promise<FeedbackConversation> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const res = await fetch(
+    `${getBackendBaseURL()}/api/platform/admin/feedback/${encodeURIComponent(feedbackId)}/conversation?${params.toString()}`,
+  );
+  return readJsonOrThrow<FeedbackConversation>(
+    res,
+    `Failed to load feedback conversation: ${res.statusText}`,
   );
 }

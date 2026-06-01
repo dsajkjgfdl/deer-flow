@@ -122,8 +122,29 @@ export interface FeedbackRecord {
   thread_id: string;
   run_id: string;
   user_id: string | null;
+  user_email?: string | null;
+  run_user_id?: string | null;
   agent_name: string;
   rating: number;
   comment: string | null;
+  first_human_message?: string | null;
+  last_ai_message?: string | null;
+  message_count?: number;
   created_at?: string;
+}
+
+export interface FeedbackConversationMessage {
+  thread_id?: string;
+  run_id?: string;
+  event_type: string;
+  category?: string;
+  content?: unknown;
+  metadata?: Record<string, unknown>;
+  seq?: number;
+  created_at?: string;
+}
+
+export interface FeedbackConversation {
+  feedback: FeedbackRecord;
+  messages: FeedbackConversationMessage[];
 }

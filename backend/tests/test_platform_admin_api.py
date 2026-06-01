@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from uuid import UUID
 
 from _router_auth_helpers import make_authed_test_app
@@ -105,9 +106,56 @@ class FakeFeedbackRepo:
                 "agent_name": "hr-boss-agent",
                 "rating": -1,
                 "comment": "wrong data",
+                "run_user_id": "user-1",
+                "first_human_message": "How many people are in R&D?",
+                "last_ai_message": "There are 42 people in R&D.",
+                "message_count": 2,
                 "created_at": "2026-05-29T00:00:00+00:00",
             }
         ][:limit]
+
+    async def get_for_admin(self, feedback_id: str) -> dict | None:
+        if feedback_id != "fb-1":
+            return None
+        return (await self.recent_for_admin(limit=1))[0]
+
+
+class FakeRunEventStore:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def list_messages_by_run(self, thread_id: str, run_id: str, *, limit: int = 50, user_id=None):
+        self.calls.append(
+            {
+                "thread_id": thread_id,
+                "run_id": run_id,
+                "limit": limit,
+                "user_id": user_id,
+            }
+        )
+        return [
+            {
+                "thread_id": thread_id,
+                "run_id": run_id,
+                "event_type": "human_message",
+                "category": "message",
+                "content": {"type": "human", "content": "How many people are in R&D?"},
+                "seq": 1,
+            },
+            {
+                "thread_id": thread_id,
+                "run_id": run_id,
+                "event_type": "ai_message",
+                "category": "message",
+                "content": {"type": "ai", "content": "There are 42 people in R&D."},
+                "seq": 2,
+            },
+        ]
+
+
+class FakeEmptyRunEventStore:
+    async def list_messages_by_run(self, thread_id: str, run_id: str, *, limit: int = 50, user_id=None):
+        return []
 
 
 class FakeLocalProvider:
@@ -133,9 +181,15 @@ class FakeLocalProvider:
                 needs_setup=True,
             ),
         ]
+        self.users_by_id = {
+            "user-1": SimpleNamespace(id="user-1", email="reviewer@example.com"),
+        }
 
     async def list_users(self, *, limit: int = 50, offset: int = 0):
         return self.users[offset : offset + limit], len(self.users)
+
+    async def get_user(self, user_id: str):
+        return self.users_by_id.get(user_id)
 
 
 def test_admin_users_route_returns_paginated_users(monkeypatch):
@@ -209,13 +263,14 @@ def test_admin_assignment_rejects_invalid_agent(monkeypatch):
     assert "invalid" in response.json()["detail"]
 
 
-def test_admin_feedback_routes_return_summary_and_recent():
+def test_admin_feedback_routes_return_summary_and_recent(monkeypatch):
     from app.gateway.routers import platform_admin
 
     app = make_authed_test_app(user_factory=lambda: _user("admin"))
     app.state.platform_repo = FakePlatformRepo()
     app.state.feedback_repo = FakeFeedbackRepo()
     app.include_router(platform_admin.router)
+    monkeypatch.setattr(platform_admin, "get_local_provider", lambda: FakeLocalProvider())
 
     with TestClient(app) as client:
         summary = client.get("/api/platform/admin/feedback/summary")
@@ -237,8 +292,83 @@ def test_admin_feedback_routes_return_summary_and_recent():
             "agent_name": "hr-boss-agent",
             "rating": -1,
             "comment": "wrong data",
+            "user_email": "reviewer@example.com",
+            "run_user_id": "user-1",
+            "first_human_message": "How many people are in R&D?",
+            "last_ai_message": "There are 42 people in R&D.",
+            "message_count": 2,
             "created_at": "2026-05-29T00:00:00+00:00",
         }
+    ]
+
+
+def test_admin_feedback_conversation_returns_voter_and_messages(monkeypatch):
+    from app.gateway.routers import platform_admin
+
+    event_store = FakeRunEventStore()
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = FakePlatformRepo()
+    app.state.feedback_repo = FakeFeedbackRepo()
+    app.state.run_event_store = event_store
+    app.include_router(platform_admin.router)
+    monkeypatch.setattr(platform_admin, "get_local_provider", lambda: FakeLocalProvider())
+
+    with TestClient(app) as client:
+        response = client.get("/api/platform/admin/feedback/fb-1/conversation?limit=50")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["feedback"]["feedback_id"] == "fb-1"
+    assert data["feedback"]["user_email"] == "reviewer@example.com"
+    assert data["feedback"]["first_human_message"] == "How many people are in R&D?"
+    assert [message["event_type"] for message in data["messages"]] == [
+        "human_message",
+        "ai_message",
+    ]
+    assert event_store.calls == [
+        {
+            "thread_id": "thread-1",
+            "run_id": "run-1",
+            "limit": 50,
+            "user_id": None,
+        }
+    ]
+
+
+def test_admin_feedback_conversation_falls_back_to_run_summary(monkeypatch):
+    from app.gateway.routers import platform_admin
+
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = FakePlatformRepo()
+    app.state.feedback_repo = FakeFeedbackRepo()
+    app.state.run_event_store = FakeEmptyRunEventStore()
+    app.include_router(platform_admin.router)
+    monkeypatch.setattr(platform_admin, "get_local_provider", lambda: FakeLocalProvider())
+
+    with TestClient(app) as client:
+        response = client.get("/api/platform/admin/feedback/fb-1/conversation?limit=50")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["messages"] == [
+        {
+            "thread_id": "thread-1",
+            "run_id": "run-1",
+            "event_type": "human_message",
+            "category": "message",
+            "content": {"type": "human", "content": "How many people are in R&D?"},
+            "metadata": {"source": "run_summary"},
+            "seq": 1,
+        },
+        {
+            "thread_id": "thread-1",
+            "run_id": "run-1",
+            "event_type": "ai_message",
+            "category": "message",
+            "content": {"type": "ai", "content": "There are 42 people in R&D."},
+            "metadata": {"source": "run_summary"},
+            "seq": 2,
+        },
     ]
 
 

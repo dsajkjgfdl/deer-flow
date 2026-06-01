@@ -2,13 +2,33 @@
 
 import {
   AlertCircleIcon,
+  BotIcon,
+  ClockIcon,
+  EyeIcon,
+  MailIcon,
   MessageSquareIcon,
   ThumbsDownIcon,
   ThumbsUpIcon,
+  UserIcon,
 } from "lucide-react";
+import { useMemo, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { useFeedbackSummary, useRecentFeedback } from "@/core/platform";
+import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  useFeedbackConversation,
+  useFeedbackSummary,
+  useRecentFeedback,
+  type FeedbackConversationMessage,
+  type FeedbackRecord,
+} from "@/core/platform";
 
 function displayError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -25,11 +45,105 @@ function percentText(value: number | null | undefined) {
   return `${Math.round(value * 100)}%`;
 }
 
+function shortId(value: string | null | undefined) {
+  if (!value) {
+    return "-";
+  }
+  return value.length > 8 ? value.slice(0, 8) : value;
+}
+
+function timeText(value: string | null | undefined) {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function snippetText(value: string | null | undefined) {
+  const text = value?.trim();
+  if (text) {
+    return text;
+  }
+  return "-";
+}
+
+function extractMessageText(value: unknown): string {
+  if (value == null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(extractMessageText).filter(Boolean).join("\n");
+  }
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const nested =
+      obj.content ?? obj.text ?? obj.message ?? obj.output ?? obj.value;
+    if (nested !== undefined) {
+      return extractMessageText(nested);
+    }
+    return JSON.stringify(value, null, 2);
+  }
+  return "";
+}
+
+function messageRole(message: FeedbackConversationMessage) {
+  const content = message.content;
+  const typeValue =
+    typeof content === "object" && content !== null
+      ? (content as Record<string, unknown>).type
+      : undefined;
+  const type = typeof typeValue === "string" ? typeValue : "";
+  const eventType = message.event_type.toLowerCase();
+  if (type.includes("human") || eventType.includes("human")) {
+    return "User";
+  }
+  if (type.includes("ai") || eventType.includes("ai")) {
+    return "Assistant";
+  }
+  if (type.includes("tool") || eventType.includes("tool")) {
+    return "Tool";
+  }
+  return message.event_type;
+}
+
+function voterText(item: FeedbackRecord) {
+  return item.user_email ?? item.user_id ?? "Unknown user";
+}
+
 export function FeedbackPage() {
+  const [selectedFeedbackId, setSelectedFeedbackId] = useState<string | null>(
+    null,
+  );
   const feedbackSummary = useFeedbackSummary();
   const recentFeedback = useRecentFeedback(20);
+  const selectedFeedback = recentFeedback.items.find(
+    (item) => item.feedback_id === selectedFeedbackId,
+  );
+  const feedbackConversation = useFeedbackConversation(selectedFeedbackId);
   const feedbackError = feedbackSummary.error ?? recentFeedback.error;
+  const conversationError = feedbackConversation.error;
   const summary = feedbackSummary.summary;
+  const negativeItems = useMemo(
+    () => recentFeedback.items.filter((item) => item.rating === -1),
+    [recentFeedback.items],
+  );
+  const drawerFeedback =
+    feedbackConversation.conversation?.feedback ?? selectedFeedback ?? null;
 
   return (
     <section className="space-y-6">
@@ -137,57 +251,175 @@ export function FeedbackPage() {
           </table>
         </div>
 
-        <div className="overflow-x-auto rounded-md border">
-          <div className="border-b px-4 py-3 text-sm font-medium">
-            Recent negative feedback
+        <div className="rounded-md border">
+          <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
+            <div className="text-sm font-medium">Recent negative feedback</div>
+            <div className="text-muted-foreground text-xs">
+              {negativeItems.length} items
+            </div>
           </div>
-          <table className="w-full min-w-[720px] text-sm">
-            <thead className="bg-muted/50 text-muted-foreground">
-              <tr className="text-left">
-                <th className="px-4 py-3 font-medium">Agent</th>
-                <th className="px-4 py-3 font-medium">Target</th>
-                <th className="px-4 py-3 font-medium">Comment</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recentFeedback.isLoading ? (
-                <tr>
-                  <td
-                    className="text-muted-foreground px-4 py-8 text-center"
-                    colSpan={3}
-                  >
-                    Loading...
-                  </td>
-                </tr>
-              ) : recentFeedback.items.filter((item) => item.rating === -1)
-                  .length === 0 ? (
-                <tr>
-                  <td
-                    className="text-muted-foreground px-4 py-8 text-center"
-                    colSpan={3}
-                  >
-                    No recent negative feedback.
-                  </td>
-                </tr>
-              ) : (
-                recentFeedback.items
-                  .filter((item) => item.rating === -1)
-                  .map((item) => (
-                    <tr key={item.feedback_id} className="border-t">
-                      <td className="px-4 py-3 font-medium">
-                        {item.agent_name}
-                      </td>
-                      <td className="text-muted-foreground px-4 py-3 font-mono text-xs">
-                        {item.thread_id} / {item.run_id}
-                      </td>
-                      <td className="px-4 py-3">{item.comment ?? "-"}</td>
-                    </tr>
-                  ))
-              )}
-            </tbody>
-          </table>
+          {recentFeedback.isLoading ? (
+            <div className="text-muted-foreground px-4 py-8 text-center text-sm">
+              Loading...
+            </div>
+          ) : negativeItems.length === 0 ? (
+            <div className="text-muted-foreground px-4 py-8 text-center text-sm">
+              No recent negative feedback.
+            </div>
+          ) : (
+            <div className="divide-y">
+              {negativeItems.map((item) => (
+                <div
+                  key={item.feedback_id}
+                  className="grid gap-4 px-4 py-4 text-sm lg:grid-cols-[minmax(160px,0.75fr)_minmax(0,1.45fr)_auto]"
+                >
+                  <div className="min-w-0 space-y-2">
+                    <div className="truncate font-medium">
+                      {item.agent_name}
+                    </div>
+                    <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
+                      <ClockIcon className="size-3.5" />
+                      {timeText(item.created_at)}
+                    </div>
+                    <div className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-xs">
+                      <MailIcon className="size-3.5 shrink-0" />
+                      <span className="truncate">{voterText(item)}</span>
+                    </div>
+                    <div className="text-muted-foreground font-mono text-xs">
+                      t:{shortId(item.thread_id)} r:{shortId(item.run_id)}
+                    </div>
+                  </div>
+
+                  <div className="min-w-0 space-y-2">
+                    <div>
+                      <div className="text-muted-foreground mb-1 flex items-center gap-1.5 text-xs font-medium">
+                        <UserIcon className="size-3.5" />
+                        User question
+                      </div>
+                      <p className="line-clamp-2 break-words">
+                        {snippetText(item.first_human_message)}
+                      </p>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground mb-1 flex items-center gap-1.5 text-xs font-medium">
+                        <BotIcon className="size-3.5" />
+                        Assistant answer
+                      </div>
+                      <p className="text-muted-foreground line-clamp-2 break-words">
+                        {snippetText(item.last_ai_message)}
+                      </p>
+                    </div>
+                    {item.comment && (
+                      <div className="bg-muted/40 rounded-md px-3 py-2 text-xs">
+                        {item.comment}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-start lg:justify-end">
+                    <Button
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                      onClick={() => setSelectedFeedbackId(item.feedback_id)}
+                    >
+                      <EyeIcon className="size-4" />
+                      View
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
+
+      <Sheet
+        open={selectedFeedbackId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedFeedbackId(null);
+          }
+        }}
+      >
+        <SheetContent className="w-full sm:max-w-3xl">
+          <SheetHeader className="border-b">
+            <SheetTitle>Feedback conversation</SheetTitle>
+            <SheetDescription>
+              {drawerFeedback
+                ? `${drawerFeedback.agent_name} - ${voterText(drawerFeedback)}`
+                : "Loading feedback context"}
+            </SheetDescription>
+          </SheetHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+            {conversationError && (
+              <Alert className="mb-4" variant="destructive">
+                <AlertCircleIcon />
+                <AlertTitle>Conversation unavailable</AlertTitle>
+                <AlertDescription>
+                  {displayError(conversationError)}
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {drawerFeedback && (
+              <div className="grid gap-3 border-b py-4 text-sm sm:grid-cols-3">
+                <div>
+                  <div className="text-muted-foreground text-xs">User</div>
+                  <div className="mt-1 truncate">
+                    {voterText(drawerFeedback)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground text-xs">Run</div>
+                  <div className="mt-1 font-mono text-xs">
+                    {shortId(drawerFeedback.run_id)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground text-xs">Messages</div>
+                  <div className="mt-1">
+                    {numberText(drawerFeedback.message_count)}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {feedbackConversation.isLoading ? (
+              <div className="text-muted-foreground py-8 text-center text-sm">
+                Loading conversation...
+              </div>
+            ) : feedbackConversation.conversation?.messages.length ? (
+              <div className="divide-y">
+                {feedbackConversation.conversation.messages.map(
+                  (message, index) => (
+                    <div
+                      key={`${message.seq ?? index}-${message.event_type}`}
+                      className="grid gap-3 py-4 text-sm sm:grid-cols-[120px_minmax(0,1fr)]"
+                    >
+                      <div className="text-muted-foreground flex items-center gap-2 text-xs font-medium">
+                        {messageRole(message) === "Assistant" ? (
+                          <BotIcon className="size-4" />
+                        ) : (
+                          <UserIcon className="size-4" />
+                        )}
+                        <span>{messageRole(message)}</span>
+                      </div>
+                      <div className="min-w-0 break-words whitespace-pre-wrap">
+                        {extractMessageText(message.content) || "-"}
+                      </div>
+                    </div>
+                  ),
+                )}
+              </div>
+            ) : (
+              <div className="text-muted-foreground py-8 text-center text-sm">
+                No messages found for this run.
+              </div>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
     </section>
   );
 }

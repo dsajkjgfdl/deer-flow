@@ -283,25 +283,42 @@ class FeedbackRepository:
 
     async def recent_for_admin(self, *, limit: int = 20) -> list[dict[str, Any]]:
         """Return recent feedback rows with agent names for admin monitoring."""
-        feedback_stmt = (
-            select(FeedbackRow)
-            .where(FeedbackRow.message_id.is_(None))
-            .order_by(desc(FeedbackRow.created_at))
-            .limit(limit)
-        )
-        run_stmt = select(RunRow)
+        feedback_stmt = select(FeedbackRow).where(FeedbackRow.message_id.is_(None)).order_by(desc(FeedbackRow.created_at)).limit(limit)
         async with self._sf() as session:
             feedback_rows = list((await session.execute(feedback_stmt)).scalars())
-            run_rows = list((await session.execute(run_stmt)).scalars())
+            run_ids = [feedback.run_id for feedback in feedback_rows]
+            if not run_ids:
+                return []
+            run_rows = list((await session.execute(select(RunRow).where(RunRow.run_id.in_(run_ids)))).scalars())
 
         run_by_id = {row.run_id: row for row in run_rows}
         items: list[dict[str, Any]] = []
         for feedback in feedback_rows:
             data = self._row_to_dict(feedback)
             data.pop("message_id", None)
-            data["agent_name"] = self._agent_name_for_run(run_by_id.get(feedback.run_id))
+            self._attach_run_context(data, run_by_id.get(feedback.run_id))
             items.append(data)
         return items
+
+    async def get_for_admin(self, feedback_id: str) -> dict[str, Any] | None:
+        """Return a feedback row with run context, bypassing user ownership checks for admins."""
+        async with self._sf() as session:
+            feedback = await session.get(FeedbackRow, feedback_id)
+            if feedback is None or feedback.message_id is not None:
+                return None
+            run = await session.get(RunRow, feedback.run_id)
+
+        data = self._row_to_dict(feedback)
+        data.pop("message_id", None)
+        self._attach_run_context(data, run)
+        return data
+
+    def _attach_run_context(self, data: dict[str, Any], run: RunRow | None) -> None:
+        data["agent_name"] = self._agent_name_for_run(run)
+        data["run_user_id"] = run.user_id if run is not None else None
+        data["first_human_message"] = run.first_human_message if run is not None else None
+        data["last_ai_message"] = run.last_ai_message if run is not None else None
+        data["message_count"] = run.message_count if run is not None else 0
 
     @staticmethod
     def _agent_name_for_run(run: RunRow | None) -> str:

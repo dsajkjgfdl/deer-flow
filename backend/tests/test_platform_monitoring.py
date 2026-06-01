@@ -124,6 +124,9 @@ async def test_feedback_monitoring_summarizes_feedback_by_agent(tmp_path):
                         user_id="user-1",
                         status="success",
                         metadata_json={"agent_name": "hr-boss-agent"},
+                        first_human_message="How many people are in R&D?",
+                        last_ai_message="There are 42 people in R&D.",
+                        message_count=2,
                     ),
                     RunRow(
                         run_id="run-2",
@@ -189,6 +192,22 @@ async def test_feedback_monitoring_summarizes_feedback_by_agent(tmp_path):
         }
         assert len(recent) == 2
         assert {item["agent_name"] for item in recent} <= {"hr-boss-agent", "finance-agent"}
-        assert {"feedback_id", "thread_id", "run_id", "rating", "comment", "agent_name"} <= set(recent[0])
+        assert {
+            "feedback_id",
+            "thread_id",
+            "run_id",
+            "rating",
+            "comment",
+            "agent_name",
+            "run_user_id",
+            "first_human_message",
+            "last_ai_message",
+            "message_count",
+        } <= set(recent[0])
+        negative = next(item for item in recent if item["feedback_id"] == "fb-2")
+        assert negative["run_user_id"] == "user-1"
+        assert negative["first_human_message"] == "How many people are in R&D?"
+        assert negative["last_ai_message"] == "There are 42 people in R&D."
+        assert negative["message_count"] == 2
     finally:
         await engine.dispose()
