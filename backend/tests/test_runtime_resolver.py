@@ -37,8 +37,8 @@ def _catalog_entry(name: str = "hr-boss-agent"):
 
 @pytest.mark.anyio
 async def test_admin_can_resolve_any_valid_agent(monkeypatch):
-    from deerflow.config.extensions_config import ExtensionsConfig, McpServerConfig
     import deerflow.agents.runtime_resolver as resolver
+    from deerflow.config.extensions_config import ExtensionsConfig, McpServerConfig
 
     monkeypatch.setattr(resolver, "scan_agent_catalog", lambda **_: [_catalog_entry()])
     monkeypatch.setattr(
@@ -68,9 +68,33 @@ async def test_admin_can_resolve_any_valid_agent(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_normal_user_can_resolve_assigned_agent(monkeypatch):
-    from deerflow.config.extensions_config import ExtensionsConfig, McpServerConfig
+async def test_internal_user_can_resolve_any_valid_agent(monkeypatch):
     import deerflow.agents.runtime_resolver as resolver
+    from deerflow.config.extensions_config import ExtensionsConfig, McpServerConfig
+
+    monkeypatch.setattr(resolver, "scan_agent_catalog", lambda **_: [_catalog_entry()])
+    monkeypatch.setattr(
+        resolver.ExtensionsConfig,
+        "from_file",
+        lambda: ExtensionsConfig(mcpServers={"text2cypher": McpServerConfig(enabled=True, command="t2c")}),
+    )
+
+    effective = await resolver.resolve_effective_agent_runtime(
+        user=SimpleNamespace(id="default", system_role="internal"),
+        requested_agent_name="hr-boss-agent",
+        platform_repo=FakePlatformRepo(),
+        app_config=SimpleNamespace(),
+    )
+
+    assert effective.agent_name == "hr-boss-agent"
+    assert effective.user_id == "default"
+    assert effective.effective_mcp_servers == ["text2cypher"]
+
+
+@pytest.mark.anyio
+async def test_normal_user_can_resolve_assigned_agent(monkeypatch):
+    import deerflow.agents.runtime_resolver as resolver
+    from deerflow.config.extensions_config import ExtensionsConfig, McpServerConfig
 
     monkeypatch.setattr(resolver, "scan_agent_catalog", lambda **_: [_catalog_entry()])
     monkeypatch.setattr(

@@ -109,7 +109,7 @@ async def resolve_effective_agent_runtime(
     if entry.status == "invalid":
         raise ValueError(f"Agent '{requested_agent_name}' is invalid: {entry.validation_errors}")
 
-    if role != "admin":
+    if role not in {"admin", "internal"}:
         if platform_repo is None:
             raise PermissionError("Agent assignment repository is required for normal users")
         if not await platform_repo.user_has_agent(user_id, requested_agent_name):
