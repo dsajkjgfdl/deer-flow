@@ -3,15 +3,15 @@
 import {
   AlertCircleIcon,
   BotIcon,
+  ChevronDownIcon,
   ClockIcon,
   EyeIcon,
-  MailIcon,
   MessageSquareIcon,
   ThumbsDownIcon,
   ThumbsUpIcon,
   UserIcon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import {
+  groupNegativeFeedbackByUser,
   useFeedbackConversation,
   useFeedbackSummary,
   useRecentFeedback,
@@ -136,12 +137,29 @@ function voterText(item: FeedbackRecord) {
   return item.user_email ?? item.user_id ?? "Unknown user";
 }
 
+function listText(values: string[]) {
+  return values.length ? values.join(", ") : "-";
+}
+
+function commentCountText(value: number) {
+  if (value === 0) {
+    return "No comments";
+  }
+  if (value === 1) {
+    return "1 comment";
+  }
+  return `${numberText(value)} comments`;
+}
+
 export function FeedbackPage() {
   const [selectedFeedbackId, setSelectedFeedbackId] = useState<string | null>(
     null,
   );
+  const [expandedUserKeys, setExpandedUserKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
   const feedbackSummary = useFeedbackSummary();
-  const recentFeedback = useRecentFeedback(20);
+  const recentFeedback = useRecentFeedback(100);
   const selectedFeedback = recentFeedback.items.find(
     (item) => item.feedback_id === selectedFeedbackId,
   );
@@ -149,12 +167,55 @@ export function FeedbackPage() {
   const feedbackError = feedbackSummary.error ?? recentFeedback.error;
   const conversationError = feedbackConversation.error;
   const summary = feedbackSummary.summary;
-  const negativeItems = useMemo(
-    () => recentFeedback.items.filter((item) => item.rating === -1),
+  const negativeUserGroups = useMemo(
+    () => groupNegativeFeedbackByUser(recentFeedback.items),
     [recentFeedback.items],
+  );
+  const negativeItemCount = useMemo(
+    () => negativeUserGroups.reduce((total, group) => total + group.count, 0),
+    [negativeUserGroups],
   );
   const drawerFeedback =
     feedbackConversation.conversation?.feedback ?? selectedFeedback ?? null;
+  const toggleUserGroup = useCallback((userKey: string) => {
+    setExpandedUserKeys((current) => {
+      const next = new Set(current);
+      if (next.has(userKey)) {
+        next.delete(userKey);
+      } else {
+        next.add(userKey);
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    setExpandedUserKeys((current) => {
+      if (negativeUserGroups.length === 0) {
+        return current.size === 0 ? current : new Set();
+      }
+
+      const validKeys = new Set(
+        negativeUserGroups.map((group) => group.userKey),
+      );
+      const next = new Set(
+        Array.from(current).filter((key) => validKeys.has(key)),
+      );
+      if (next.size === 0) {
+        const firstGroup = negativeUserGroups[0];
+        if (firstGroup) {
+          next.add(firstGroup.userKey);
+        }
+      }
+      if (
+        next.size === current.size &&
+        Array.from(next).every((key) => current.has(key))
+      ) {
+        return current;
+      }
+      return next;
+    });
+  }, [negativeUserGroups]);
 
   return (
     <section className="space-y-6">
@@ -264,86 +325,138 @@ export function FeedbackPage() {
 
         <div className="rounded-md border">
           <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
-            <div className="text-sm font-medium">Recent negative feedback</div>
+            <div className="text-sm font-medium">Negative feedback by user</div>
             <div className="text-muted-foreground text-xs">
-              {negativeItems.length} items
+              {negativeUserGroups.length} users / {negativeItemCount} items
             </div>
           </div>
           {recentFeedback.isLoading ? (
             <div className="text-muted-foreground px-4 py-8 text-center text-sm">
               Loading...
             </div>
-          ) : negativeItems.length === 0 ? (
+          ) : negativeUserGroups.length === 0 ? (
             <div className="text-muted-foreground px-4 py-8 text-center text-sm">
               No recent negative feedback.
             </div>
           ) : (
             <div className="divide-y">
-              {negativeItems.map((item) => (
-                <div
-                  key={item.feedback_id}
-                  className="grid gap-4 px-4 py-4 text-sm lg:grid-cols-[minmax(160px,0.75fr)_minmax(0,1.45fr)_auto]"
-                >
-                  <div className="min-w-0 space-y-2">
-                    <div className="truncate font-medium">
-                      {item.agent_name}
-                    </div>
-                    <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
-                      <ClockIcon className="size-3.5" />
-                      {timeText(item.created_at)}
-                    </div>
-                    <div className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-xs">
-                      <MessageSquareIcon className="size-3.5 shrink-0" />
-                      <span className="truncate">{channelText(item)}</span>
-                    </div>
-                    <div className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-xs">
-                      <MailIcon className="size-3.5 shrink-0" />
-                      <span className="truncate">{voterText(item)}</span>
-                    </div>
-                    <div className="text-muted-foreground font-mono text-xs">
-                      t:{shortId(item.thread_id)} r:{shortId(item.run_id)}
-                    </div>
-                  </div>
+              {negativeUserGroups.map((group) => {
+                const isExpanded = expandedUserKeys.has(group.userKey);
+                return (
+                  <div key={group.userKey}>
+                    <button
+                      type="button"
+                      className="hover:bg-muted/40 flex w-full items-start gap-3 px-4 py-4 text-left transition-colors"
+                      aria-expanded={isExpanded}
+                      onClick={() => toggleUserGroup(group.userKey)}
+                    >
+                      <ChevronDownIcon
+                        className={`text-muted-foreground mt-0.5 size-4 shrink-0 transition-transform ${
+                          isExpanded ? "rotate-0" : "-rotate-90"
+                        }`}
+                      />
+                      <div className="min-w-0 flex-1 space-y-2">
+                        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                          <div className="truncate text-sm font-medium">
+                            {group.userLabel}
+                          </div>
+                          <div className="text-muted-foreground text-xs">
+                            {numberText(group.count)} negative
+                          </div>
+                          <div className="text-muted-foreground text-xs">
+                            {commentCountText(group.commentCount)}
+                          </div>
+                        </div>
+                        <div className="text-muted-foreground grid gap-1.5 text-xs sm:grid-cols-2">
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <BotIcon className="size-3.5 shrink-0" />
+                            <span className="truncate">
+                              {listText(group.agentNames)}
+                            </span>
+                          </div>
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <MessageSquareIcon className="size-3.5 shrink-0" />
+                            <span className="truncate">
+                              {listText(group.sourceChannels)}
+                            </span>
+                          </div>
+                          <div className="flex min-w-0 items-center gap-1.5 sm:col-span-2">
+                            <ClockIcon className="size-3.5 shrink-0" />
+                            <span className="truncate">
+                              Latest {timeText(group.latestCreatedAt)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </button>
 
-                  <div className="min-w-0 space-y-2">
-                    <div>
-                      <div className="text-muted-foreground mb-1 flex items-center gap-1.5 text-xs font-medium">
-                        <UserIcon className="size-3.5" />
-                        User question
-                      </div>
-                      <p className="line-clamp-2 break-words">
-                        {snippetText(item.first_human_message)}
-                      </p>
-                    </div>
-                    <div>
-                      <div className="text-muted-foreground mb-1 flex items-center gap-1.5 text-xs font-medium">
-                        <BotIcon className="size-3.5" />
-                        Assistant answer
-                      </div>
-                      <p className="text-muted-foreground line-clamp-2 break-words">
-                        {snippetText(item.last_ai_message)}
-                      </p>
-                    </div>
-                    {item.comment && (
-                      <div className="bg-muted/40 rounded-md px-3 py-2 text-xs">
-                        {item.comment}
+                    {isExpanded && (
+                      <div className="bg-muted/20 divide-y border-t">
+                        {group.items.map((item) => (
+                          <div
+                            key={item.feedback_id}
+                            className="grid gap-4 px-4 py-4 text-sm lg:grid-cols-[minmax(0,1fr)_auto]"
+                          >
+                            <div className="min-w-0 space-y-3">
+                              <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                                <span className="text-foreground font-medium">
+                                  {item.agent_name}
+                                </span>
+                                <span className="flex items-center gap-1.5">
+                                  <ClockIcon className="size-3.5" />
+                                  {timeText(item.created_at)}
+                                </span>
+                                <span className="font-mono">
+                                  t:{shortId(item.thread_id)} r:
+                                  {shortId(item.run_id)}
+                                </span>
+                              </div>
+
+                              <div>
+                                <div className="text-muted-foreground mb-1 flex items-center gap-1.5 text-xs font-medium">
+                                  <UserIcon className="size-3.5" />
+                                  User question
+                                </div>
+                                <p className="line-clamp-2 break-words">
+                                  {snippetText(item.first_human_message)}
+                                </p>
+                              </div>
+                              <div>
+                                <div className="text-muted-foreground mb-1 flex items-center gap-1.5 text-xs font-medium">
+                                  <BotIcon className="size-3.5" />
+                                  Assistant answer
+                                </div>
+                                <p className="text-muted-foreground line-clamp-2 break-words">
+                                  {snippetText(item.last_ai_message)}
+                                </p>
+                              </div>
+                              {item.comment && (
+                                <div className="bg-background rounded-md border px-3 py-2 text-xs">
+                                  {item.comment}
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="flex items-start lg:justify-end">
+                              <Button
+                                size="sm"
+                                type="button"
+                                variant="outline"
+                                onClick={() =>
+                                  setSelectedFeedbackId(item.feedback_id)
+                                }
+                              >
+                                <EyeIcon className="size-4" />
+                                View
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>
-
-                  <div className="flex items-start lg:justify-end">
-                    <Button
-                      size="sm"
-                      type="button"
-                      variant="outline"
-                      onClick={() => setSelectedFeedbackId(item.feedback_id)}
-                    >
-                      <EyeIcon className="size-4" />
-                      View
-                    </Button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
