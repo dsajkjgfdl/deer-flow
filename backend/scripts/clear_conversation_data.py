@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 CONVERSATION_TABLES = (
+    "channel_feedback_targets",
     "feedback",
     "run_events",
     "runs",

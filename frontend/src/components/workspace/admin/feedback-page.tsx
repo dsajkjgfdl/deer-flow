@@ -121,7 +121,18 @@ function messageRole(message: FeedbackConversationMessage) {
   return message.event_type;
 }
 
+function channelText(item: FeedbackRecord) {
+  const channel = item.source_channel?.trim();
+  if (channel) {
+    return channel;
+  }
+  return "web";
+}
+
 function voterText(item: FeedbackRecord) {
+  if (item.source_channel && item.source_channel !== "web") {
+    return item.platform_user_id ?? item.user_id ?? "Unknown user";
+  }
   return item.user_email ?? item.user_id ?? "Unknown user";
 }
 
@@ -282,6 +293,10 @@ export function FeedbackPage() {
                       {timeText(item.created_at)}
                     </div>
                     <div className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-xs">
+                      <MessageSquareIcon className="size-3.5 shrink-0" />
+                      <span className="truncate">{channelText(item)}</span>
+                    </div>
+                    <div className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-xs">
                       <MailIcon className="size-3.5 shrink-0" />
                       <span className="truncate">{voterText(item)}</span>
                     </div>
@@ -363,11 +378,17 @@ export function FeedbackPage() {
             )}
 
             {drawerFeedback && (
-              <div className="grid gap-3 border-b py-4 text-sm sm:grid-cols-3">
+              <div className="grid gap-3 border-b py-4 text-sm sm:grid-cols-4">
                 <div>
                   <div className="text-muted-foreground text-xs">User</div>
                   <div className="mt-1 truncate">
                     {voterText(drawerFeedback)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground text-xs">Source</div>
+                  <div className="mt-1 truncate">
+                    {channelText(drawerFeedback)}
                   </div>
                 </div>
                 <div>

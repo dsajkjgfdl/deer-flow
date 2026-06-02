@@ -30,3 +30,18 @@ class FeedbackRow(Base):
     # Optional text feedback from the user
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+
+class ChannelFeedbackTargetRow(Base):
+    __tablename__ = "channel_feedback_targets"
+
+    native_feedback_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    channel_name: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    chat_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    platform_user_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    platform_message_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    thread_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    run_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    feedback_row_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))

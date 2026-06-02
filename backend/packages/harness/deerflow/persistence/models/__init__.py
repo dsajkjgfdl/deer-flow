@@ -15,7 +15,7 @@ its storage implementation lives in ``deerflow.runtime.events.store.db`` and
 there is no matching entity directory.
 """
 
-from deerflow.persistence.feedback.model import FeedbackRow
+from deerflow.persistence.feedback.model import ChannelFeedbackTargetRow, FeedbackRow
 from deerflow.persistence.models.run_event import RunEventRow
 from deerflow.persistence.platform.model import AdminAuditLogRow, AgentAssignmentRow, ToolAuditLogRow
 from deerflow.persistence.run.model import RunRow
@@ -25,6 +25,7 @@ from deerflow.persistence.user.model import UserRow
 __all__ = [
     "AdminAuditLogRow",
     "AgentAssignmentRow",
+    "ChannelFeedbackTargetRow",
     "FeedbackRow",
     "RunEventRow",
     "RunRow",

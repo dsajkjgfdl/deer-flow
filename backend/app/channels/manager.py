@@ -57,6 +57,25 @@ def _slim_metadata(meta: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in meta.items() if k not in _METADATA_DROP_KEYS}
 
 
+def _merge_outbound_metadata(msg: InboundMessage, *, run_id: str | None = None) -> dict[str, Any]:
+    metadata = _slim_metadata(msg.metadata)
+    metadata.setdefault("platform_user_id", msg.user_id)
+    if run_id:
+        metadata["run_id"] = run_id
+    return metadata
+
+
+def _extract_stream_run_id(chunk: Any, event: str, data: Any) -> str | None:
+    value = getattr(chunk, "run_id", None)
+    if isinstance(value, str) and value:
+        return value
+    if event == "metadata" and isinstance(data, dict):
+        value = data.get("run_id") or data.get("runId")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 INBOUND_FILE_READERS: dict[str, InboundFileReader] = {}
 
 
@@ -838,6 +857,7 @@ class ChannelManager:
         last_published_text = ""
         last_publish_at = 0.0
         stream_error: BaseException | None = None
+        stream_run_id: str | None = None
 
         try:
             async for chunk in client.runs.stream(
@@ -851,6 +871,7 @@ class ChannelManager:
             ):
                 event = getattr(chunk, "event", "")
                 data = getattr(chunk, "data", None)
+                stream_run_id = _extract_stream_run_id(chunk, event, data) or stream_run_id
 
                 if event == "messages-tuple":
                     accumulated_text, current_message_id = _accumulate_stream_text(streamed_buffers, current_message_id, data)
@@ -877,7 +898,7 @@ class ChannelManager:
                         text=latest_text,
                         is_final=False,
                         thread_ts=msg.thread_ts,
-                        metadata=_slim_metadata(msg.metadata),
+                        metadata=_merge_outbound_metadata(msg, run_id=stream_run_id),
                     )
                 )
                 last_published_text = latest_text
@@ -922,7 +943,7 @@ class ChannelManager:
                     attachments=attachments,
                     is_final=True,
                     thread_ts=msg.thread_ts,
-                    metadata=_slim_metadata(msg.metadata),
+                    metadata=_merge_outbound_metadata(msg, run_id=stream_run_id),
                 )
             )
 

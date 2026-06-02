@@ -5,6 +5,7 @@ Each method acquires its own short-lived session.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -12,7 +13,7 @@ from typing import Any
 from sqlalchemy import case, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from deerflow.persistence.feedback.model import FeedbackRow
+from deerflow.persistence.feedback.model import ChannelFeedbackTargetRow, FeedbackRow
 from deerflow.persistence.run.model import RunRow
 from deerflow.runtime.user_context import AUTO, _AutoSentinel, resolve_user_id
 from deerflow.utils.time import coerce_iso
@@ -30,6 +31,24 @@ class FeedbackRepository:
             # SQLite drops tzinfo on read; normalize via ``coerce_iso`` so output is always tz-aware.
             d["created_at"] = coerce_iso(val)
         return d
+
+    @staticmethod
+    def _target_to_dict(row: ChannelFeedbackTargetRow) -> dict:
+        d = row.to_dict()
+        for key in ("created_at", "updated_at"):
+            val = d.get(key)
+            if isinstance(val, datetime):
+                d[key] = coerce_iso(val)
+        return d
+
+    @staticmethod
+    def _channel_user_id(channel_name: str, platform_user_id: str | None) -> str:
+        suffix = platform_user_id.strip() if isinstance(platform_user_id, str) and platform_user_id.strip() else "unknown"
+        user_id = f"{channel_name}:{suffix}"
+        if len(user_id) <= 64:
+            return user_id
+        digest = hashlib.sha256(suffix.encode("utf-8")).hexdigest()
+        return f"{channel_name}:{digest[: 63 - len(channel_name)]}"
 
     async def create(
         self,
@@ -199,6 +218,135 @@ class FeedbackRepository:
             await session.commit()
             return True
 
+    async def upsert_channel_feedback_target(
+        self,
+        *,
+        native_feedback_id: str,
+        channel_name: str,
+        chat_id: str | None = None,
+        platform_user_id: str | None = None,
+        platform_message_id: str | None = None,
+        thread_id: str | None = None,
+        run_id: str | None = None,
+    ) -> dict:
+        """Save the platform feedback id that can later be resolved to a DeerFlow run."""
+        now = datetime.now(UTC)
+        async with self._sf() as session:
+            row = await session.get(ChannelFeedbackTargetRow, native_feedback_id)
+            if row is None:
+                row = ChannelFeedbackTargetRow(
+                    native_feedback_id=native_feedback_id,
+                    channel_name=channel_name,
+                    chat_id=chat_id,
+                    platform_user_id=platform_user_id,
+                    platform_message_id=platform_message_id,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(row)
+            else:
+                row.channel_name = channel_name
+                if chat_id is not None:
+                    row.chat_id = chat_id
+                if platform_user_id is not None:
+                    row.platform_user_id = platform_user_id
+                if platform_message_id is not None:
+                    row.platform_message_id = platform_message_id
+                if thread_id is not None:
+                    row.thread_id = thread_id
+                if run_id is not None:
+                    row.run_id = run_id
+                row.updated_at = now
+            await session.commit()
+            await session.refresh(row)
+            return self._target_to_dict(row)
+
+    async def get_channel_feedback_target(
+        self,
+        native_feedback_id: str,
+        *,
+        channel_name: str | None = None,
+    ) -> dict | None:
+        async with self._sf() as session:
+            row = await session.get(ChannelFeedbackTargetRow, native_feedback_id)
+            if row is None:
+                return None
+            if channel_name is not None and row.channel_name != channel_name:
+                return None
+            return self._target_to_dict(row)
+
+    async def record_channel_feedback(
+        self,
+        *,
+        native_feedback_id: str,
+        channel_name: str,
+        rating: int | None,
+        platform_user_id: str | None = None,
+        comment: str | None = None,
+    ) -> dict | None:
+        """Apply a native channel feedback event to the run-level feedback table."""
+        if rating is not None and rating not in (1, -1):
+            raise ValueError(f"rating must be +1, -1, or None, got {rating}")
+        resolved_platform_user_id = platform_user_id
+        user_id = self._channel_user_id(channel_name, resolved_platform_user_id)
+        now = datetime.now(UTC)
+
+        async with self._sf() as session:
+            target = await session.get(ChannelFeedbackTargetRow, native_feedback_id)
+            if target is None or target.channel_name != channel_name:
+                return None
+            if resolved_platform_user_id is None:
+                resolved_platform_user_id = target.platform_user_id
+                user_id = self._channel_user_id(channel_name, resolved_platform_user_id)
+            elif target.platform_user_id != resolved_platform_user_id:
+                target.platform_user_id = resolved_platform_user_id
+            if not target.thread_id or not target.run_id:
+                target.updated_at = now
+                await session.commit()
+                return None
+
+            stmt = select(FeedbackRow).where(
+                FeedbackRow.thread_id == target.thread_id,
+                FeedbackRow.run_id == target.run_id,
+                FeedbackRow.user_id == user_id,
+                FeedbackRow.message_id.is_(None),
+            )
+            result = await session.execute(stmt)
+            row = result.scalar_one_or_none()
+
+            if rating is None:
+                if row is not None:
+                    await session.delete(row)
+                target.feedback_row_id = None
+                target.updated_at = now
+                await session.commit()
+                return {"deleted": row is not None}
+
+            if row is None:
+                row = FeedbackRow(
+                    feedback_id=str(uuid.uuid4()),
+                    run_id=target.run_id,
+                    thread_id=target.thread_id,
+                    user_id=user_id,
+                    message_id=None,
+                    rating=rating,
+                    comment=comment,
+                    created_at=now,
+                )
+                session.add(row)
+            else:
+                row.rating = rating
+                row.message_id = None
+                row.comment = comment
+                row.created_at = now
+            target.feedback_row_id = row.feedback_id
+            target.updated_at = now
+            await session.commit()
+            await session.refresh(row)
+            return self._row_to_dict(row)
+
     async def list_by_thread_grouped(
         self,
         thread_id: str,
@@ -290,13 +438,17 @@ class FeedbackRepository:
             if not run_ids:
                 return []
             run_rows = list((await session.execute(select(RunRow).where(RunRow.run_id.in_(run_ids)))).scalars())
+            feedback_ids = [feedback.feedback_id for feedback in feedback_rows]
+            target_rows = list((await session.execute(select(ChannelFeedbackTargetRow).where(ChannelFeedbackTargetRow.feedback_row_id.in_(feedback_ids)))).scalars())
 
         run_by_id = {row.run_id: row for row in run_rows}
+        target_by_feedback_id = {row.feedback_row_id: row for row in target_rows}
         items: list[dict[str, Any]] = []
         for feedback in feedback_rows:
             data = self._row_to_dict(feedback)
             data.pop("message_id", None)
             self._attach_run_context(data, run_by_id.get(feedback.run_id))
+            self._attach_channel_context(data, target_by_feedback_id.get(feedback.feedback_id))
             items.append(data)
         return items
 
@@ -307,10 +459,13 @@ class FeedbackRepository:
             if feedback is None or feedback.message_id is not None:
                 return None
             run = await session.get(RunRow, feedback.run_id)
+            target_result = await session.execute(select(ChannelFeedbackTargetRow).where(ChannelFeedbackTargetRow.feedback_row_id == feedback_id).limit(1))
+            target = target_result.scalars().first()
 
         data = self._row_to_dict(feedback)
         data.pop("message_id", None)
         self._attach_run_context(data, run)
+        self._attach_channel_context(data, target)
         return data
 
     def _attach_run_context(self, data: dict[str, Any], run: RunRow | None) -> None:
@@ -319,6 +474,14 @@ class FeedbackRepository:
         data["first_human_message"] = run.first_human_message if run is not None else None
         data["last_ai_message"] = run.last_ai_message if run is not None else None
         data["message_count"] = run.message_count if run is not None else 0
+
+    @staticmethod
+    def _attach_channel_context(data: dict[str, Any], target: ChannelFeedbackTargetRow | None) -> None:
+        data["source_channel"] = target.channel_name if target is not None else "web"
+        data["platform_user_id"] = target.platform_user_id if target is not None else None
+        data["platform_chat_id"] = target.chat_id if target is not None else None
+        data["platform_message_id"] = target.platform_message_id if target is not None else None
+        data["platform_feedback_id"] = target.native_feedback_id if target is not None else None
 
     @staticmethod
     def _agent_name_for_run(run: RunRow | None) -> str:

@@ -40,6 +40,7 @@ def _seed_sqlite(db_path: Path) -> None:
             CREATE TABLE runs (run_id TEXT PRIMARY KEY, thread_id TEXT);
             CREATE TABLE run_events (id INTEGER PRIMARY KEY, thread_id TEXT, run_id TEXT);
             CREATE TABLE feedback (feedback_id TEXT PRIMARY KEY, thread_id TEXT, run_id TEXT);
+            CREATE TABLE channel_feedback_targets (native_feedback_id TEXT PRIMARY KEY, feedback_row_id TEXT);
             CREATE TABLE threads_meta (thread_id TEXT PRIMARY KEY, metadata_json TEXT);
             CREATE TABLE checkpoints (thread_id TEXT, checkpoint_ns TEXT, checkpoint_id TEXT);
             CREATE TABLE checkpoint_writes (thread_id TEXT, checkpoint_ns TEXT, checkpoint_id TEXT);
@@ -49,6 +50,7 @@ def _seed_sqlite(db_path: Path) -> None:
             INSERT INTO runs VALUES ('r1', 't1');
             INSERT INTO run_events VALUES (1, 't1', 'r1');
             INSERT INTO feedback VALUES ('f1', 't1', 'r1');
+            INSERT INTO channel_feedback_targets VALUES ('deerflow:wecom:msg-1', 'f1');
             INSERT INTO threads_meta VALUES ('t1', '{}');
             INSERT INTO checkpoints VALUES ('t1', '', 'c1');
             INSERT INTO checkpoint_writes VALUES ('t1', '', 'c1');
@@ -75,8 +77,10 @@ def test_dry_run_reports_targets_without_deleting_sqlite_rows(tmp_path, capsys):
     assert exit_code == 0
     output = capsys.readouterr().out
     assert "DRY RUN" in output
+    assert "channel_feedback_targets: 1" in output
     assert "feedback: 1" in output
     assert _count(db_path, "users") == 1
+    assert _count(db_path, "channel_feedback_targets") == 1
     assert _count(db_path, "feedback") == 1
     assert _count(db_path, "runs") == 1
 
@@ -93,6 +97,7 @@ def test_yes_clears_conversation_tables_but_preserves_users(tmp_path):
     assert exit_code == 0
     assert _count(db_path, "users") == 1
     for table in (
+        "channel_feedback_targets",
         "feedback",
         "run_events",
         "runs",

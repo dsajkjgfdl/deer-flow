@@ -17,6 +17,13 @@ from app.channels.message_bus import (
 
 logger = logging.getLogger(__name__)
 
+_WECOM_FEEDBACK_REASON_LABELS = {
+    1: "与问题无关",
+    2: "内容不完整",
+    3: "内容有错误",
+    4: "数据分析错误",
+}
+
 
 class WeComChannel(Channel):
     def __init__(self, bus: MessageBus, config: dict[str, Any]) -> None:
@@ -28,6 +35,7 @@ class WeComChannel(Channel):
         self._ws_frames: dict[str, dict[str, Any]] = {}
         self._ws_stream_ids: dict[str, str] = {}
         self._working_message = "Working on it..."
+        self._feedback_repo = config.get("feedback_repo")
 
     @property
     def supports_streaming(self) -> bool:
@@ -38,6 +46,20 @@ class WeComChannel(Channel):
             return
         self._ws_frames.pop(thread_ts, None)
         self._ws_stream_ids.pop(thread_ts, None)
+
+    def _get_feedback_repo(self):
+        if self._feedback_repo is not None:
+            return self._feedback_repo
+        try:
+            from deerflow.persistence.engine import get_session_factory
+            from deerflow.persistence.feedback import FeedbackRepository
+        except Exception:
+            return None
+        session_factory = get_session_factory()
+        if session_factory is None:
+            return None
+        self._feedback_repo = FeedbackRepository(session_factory)
+        return self._feedback_repo
 
     async def _send_ws_upload_command(self, req_id: str, body: dict[str, Any], cmd: str) -> dict[str, Any]:
         if not self._ws_client:
@@ -78,6 +100,8 @@ class WeComChannel(Channel):
             self._ws_client.on("message.mixed", self._on_ws_mixed)
             self._ws_client.on("message.image", self._on_ws_image)
             self._ws_client.on("message.file", self._on_ws_file)
+            self._ws_client.on("event", self._on_ws_event)
+            self._ws_client.on("event.feedback_event", self._on_ws_feedback_event)
             self._ws_task = asyncio.create_task(self._ws_client.connect())
 
             self._running = True
@@ -249,6 +273,149 @@ class WeComChannel(Channel):
             ],
         )
 
+    async def _on_ws_event(self, frame: dict[str, Any]) -> None:
+        body = frame.get("body", {}) or {}
+        event = body.get("event") if isinstance(body.get("event"), dict) else {}
+        from_user = body.get("from") if isinstance(body.get("from"), dict) else {}
+        logger.info(
+            "[WeCom] event received: event_type=%s user_id=%s chat_id=%s chat_type=%s msg_id=%s aibot_id=%s",
+            event.get("eventtype"),
+            from_user.get("userid"),
+            body.get("chatid"),
+            body.get("chattype"),
+            body.get("msgid"),
+            body.get("aibotid"),
+        )
+
+    async def _on_ws_feedback_event(self, frame: dict[str, Any]) -> None:
+        body = frame.get("body", {}) or {}
+        event = body.get("event") if isinstance(body.get("event"), dict) else {}
+        feedback_event = event.get("feedback_event") if isinstance(event.get("feedback_event"), dict) else {}
+        from_user = body.get("from") if isinstance(body.get("from"), dict) else {}
+        native_feedback_id = feedback_event.get("id")
+        feedback_type = feedback_event.get("type")
+        content = feedback_event.get("content")
+        reasons = feedback_event.get("inaccurate_reason_list")
+        user_id = from_user.get("userid")
+        logger.info(
+            "[WeCom] feedback_event received: feedback_id=%s type=%s content=%s reasons=%s user_id=%s chat_id=%s chat_type=%s msg_id=%s aibot_id=%s",
+            native_feedback_id,
+            feedback_type,
+            content,
+            reasons,
+            user_id,
+            body.get("chatid"),
+            body.get("chattype"),
+            body.get("msgid"),
+            body.get("aibotid"),
+        )
+        if not isinstance(native_feedback_id, str) or not native_feedback_id:
+            return
+
+        repo = self._get_feedback_repo()
+        record_channel_feedback = getattr(repo, "record_channel_feedback", None) if repo is not None else None
+        if not callable(record_channel_feedback):
+            return
+
+        rating = self._map_feedback_type(feedback_type)
+        comment = self._format_feedback_comment(content, reasons)
+        try:
+            saved = await record_channel_feedback(
+                native_feedback_id=native_feedback_id,
+                channel_name=self.name,
+                rating=rating,
+                platform_user_id=user_id if isinstance(user_id, str) else None,
+                comment=comment,
+            )
+        except Exception:
+            logger.exception("[WeCom] failed to persist feedback_event: feedback_id=%s", native_feedback_id)
+            return
+        if saved is None:
+            logger.warning("[WeCom] feedback_event target not found or incomplete: feedback_id=%s", native_feedback_id)
+
+    @staticmethod
+    def _map_feedback_type(feedback_type: Any) -> int | None:
+        try:
+            value = int(feedback_type)
+        except (TypeError, ValueError):
+            return None
+        if value == 1:
+            return 1
+        if value == 2:
+            return -1
+        return None
+
+    @staticmethod
+    def _format_feedback_comment(content: Any, reasons: Any) -> str | None:
+        labels: list[str] = []
+        if isinstance(reasons, list):
+            for item in reasons:
+                try:
+                    code = int(item)
+                except (TypeError, ValueError):
+                    continue
+                labels.append(_WECOM_FEEDBACK_REASON_LABELS.get(code, f"原因{code}"))
+        parts: list[str] = []
+        if labels:
+            parts.append("；".join(labels))
+        if isinstance(content, str) and content.strip():
+            parts.append(f"补充反馈：{content.strip()}")
+        return "\n".join(parts) if parts else None
+
+    @staticmethod
+    def _make_feedback_id(msg_id: str) -> str:
+        feedback_id = f"deerflow:wecom:{msg_id}"
+        if len(feedback_id) <= 256:
+            return feedback_id
+        digest = hashlib.sha256(msg_id.encode("utf-8")).hexdigest()
+        return f"deerflow:wecom:{digest}"
+
+    async def _upsert_feedback_target(
+        self,
+        *,
+        native_feedback_id: str,
+        chat_id: str | None,
+        platform_user_id: str | None,
+        platform_message_id: str | None,
+        thread_id: str | None,
+        run_id: str | None,
+    ) -> None:
+        repo = self._get_feedback_repo()
+        upsert_channel_feedback_target = getattr(repo, "upsert_channel_feedback_target", None) if repo is not None else None
+        if not callable(upsert_channel_feedback_target):
+            return
+        try:
+            await upsert_channel_feedback_target(
+                native_feedback_id=native_feedback_id,
+                channel_name=self.name,
+                chat_id=chat_id,
+                platform_user_id=platform_user_id,
+                platform_message_id=platform_message_id,
+                thread_id=thread_id,
+                run_id=run_id,
+            )
+        except Exception:
+            logger.exception("[WeCom] failed to save feedback target: feedback_id=%s", native_feedback_id)
+
+    async def _upsert_feedback_target_for_outbound(self, msg: OutboundMessage) -> None:
+        if not msg.is_final or not msg.thread_ts:
+            return
+        run_id = msg.metadata.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            logger.warning("[WeCom] final outbound has no run_id for feedback target: msg_id=%s", msg.thread_ts)
+            return
+        platform_user_id = msg.metadata.get("platform_user_id")
+        if not isinstance(platform_user_id, str) or not platform_user_id:
+            platform_user_id = msg.chat_id
+        await self._upsert_feedback_target(
+            native_feedback_id=self._make_feedback_id(str(msg.thread_ts)),
+            chat_id=msg.chat_id,
+            platform_user_id=platform_user_id,
+            platform_message_id=str(msg.thread_ts),
+            thread_id=msg.thread_id,
+            run_id=run_id,
+        )
+
     async def _publish_ws_inbound(
         self,
         frame: dict[str, Any],
@@ -285,9 +452,31 @@ class WeComChannel(Channel):
         stream_id = generate_req_id("stream")
         self._ws_frames[msg_id] = frame
         self._ws_stream_ids[msg_id] = stream_id
+        feedback_id = self._make_feedback_id(str(msg_id))
 
         try:
-            await self._ws_client.reply_stream(frame, stream_id, self._working_message, False)
+            await self._ws_client.reply_stream(
+                frame,
+                stream_id,
+                self._working_message,
+                False,
+                feedback={"id": feedback_id},
+            )
+            logger.info(
+                "[WeCom] native feedback enabled: feedback_id=%s user_id=%s msg_id=%s stream_id=%s",
+                feedback_id,
+                user_id,
+                msg_id,
+                stream_id,
+            )
+            await self._upsert_feedback_target(
+                native_feedback_id=feedback_id,
+                chat_id=user_id if isinstance(user_id, str) else None,
+                platform_user_id=user_id if isinstance(user_id, str) else None,
+                platform_message_id=str(msg_id),
+                thread_id=None,
+                run_id=None,
+            )
         except Exception:
             pass
 
@@ -314,6 +503,7 @@ class WeComChannel(Channel):
             for attempt in range(_max_retries):
                 try:
                     await self._ws_client.reply_stream(frame, stream_id, msg.text, bool(msg.is_final))
+                    await self._upsert_feedback_target_for_outbound(msg)
                     return
                 except Exception as exc:
                     last_exc = exc

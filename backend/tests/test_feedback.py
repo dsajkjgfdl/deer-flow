@@ -221,6 +221,105 @@ class TestFeedbackRepository:
         assert grouped == {}
         await _cleanup()
 
+    @pytest.mark.anyio
+    async def test_channel_feedback_target_roundtrip(self, tmp_path):
+        repo = await _make_feedback_repo(tmp_path)
+
+        await repo.upsert_channel_feedback_target(
+            native_feedback_id="deerflow:wecom:msg-1",
+            channel_name="wecom",
+            chat_id="chat-1",
+            platform_user_id="WuZhongHui",
+            platform_message_id="msg-1",
+            thread_id="thread-1",
+            run_id="run-1",
+        )
+
+        target = await repo.get_channel_feedback_target("deerflow:wecom:msg-1", channel_name="wecom")
+        assert target is not None
+        assert target["native_feedback_id"] == "deerflow:wecom:msg-1"
+        assert target["channel_name"] == "wecom"
+        assert target["chat_id"] == "chat-1"
+        assert target["platform_user_id"] == "WuZhongHui"
+        assert target["platform_message_id"] == "msg-1"
+        assert target["thread_id"] == "thread-1"
+        assert target["run_id"] == "run-1"
+        await _cleanup()
+
+    @pytest.mark.anyio
+    async def test_channel_feedback_event_upserts_feedback_and_admin_context(self, tmp_path):
+        repo = await _make_feedback_repo(tmp_path)
+        await repo.upsert_channel_feedback_target(
+            native_feedback_id="deerflow:wecom:msg-1",
+            channel_name="wecom",
+            chat_id="chat-1",
+            platform_user_id="WuZhongHui",
+            platform_message_id="msg-1",
+            thread_id="thread-1",
+            run_id="run-1",
+        )
+
+        record = await repo.record_channel_feedback(
+            native_feedback_id="deerflow:wecom:msg-1",
+            channel_name="wecom",
+            rating=-1,
+            platform_user_id="WuZhongHui",
+            comment="与问题无关\n补充反馈：放得开上了飞机",
+        )
+
+        assert record is not None
+        assert record["rating"] == -1
+        assert record["user_id"] == "wecom:WuZhongHui"
+        assert record["comment"] == "与问题无关\n补充反馈：放得开上了飞机"
+
+        rows = await repo.list_by_run("thread-1", "run-1", user_id=None)
+        assert len(rows) == 1
+        assert rows[0]["feedback_id"] == record["feedback_id"]
+
+        recent = await repo.recent_for_admin(limit=10)
+        assert len(recent) == 1
+        assert recent[0]["source_channel"] == "wecom"
+        assert recent[0]["platform_user_id"] == "WuZhongHui"
+        assert recent[0]["platform_message_id"] == "msg-1"
+        assert recent[0]["platform_feedback_id"] == "deerflow:wecom:msg-1"
+        await _cleanup()
+
+    @pytest.mark.anyio
+    async def test_channel_feedback_cancel_deletes_existing_feedback(self, tmp_path):
+        repo = await _make_feedback_repo(tmp_path)
+        await repo.upsert_channel_feedback_target(
+            native_feedback_id="deerflow:wecom:msg-1",
+            channel_name="wecom",
+            chat_id="chat-1",
+            platform_user_id="WuZhongHui",
+            platform_message_id="msg-1",
+            thread_id="thread-1",
+            run_id="run-1",
+        )
+        created = await repo.record_channel_feedback(
+            native_feedback_id="deerflow:wecom:msg-1",
+            channel_name="wecom",
+            rating=1,
+            platform_user_id="WuZhongHui",
+            comment=None,
+        )
+        assert created is not None
+
+        deleted = await repo.record_channel_feedback(
+            native_feedback_id="deerflow:wecom:msg-1",
+            channel_name="wecom",
+            rating=None,
+            platform_user_id="WuZhongHui",
+            comment=None,
+        )
+
+        assert deleted == {"deleted": True}
+        assert await repo.list_by_run("thread-1", "run-1", user_id=None) == []
+        target = await repo.get_channel_feedback_target("deerflow:wecom:msg-1", channel_name="wecom")
+        assert target is not None
+        assert target["feedback_row_id"] is None
+        await _cleanup()
+
 
 # -- Follow-up association --
 

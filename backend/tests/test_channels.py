@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -996,6 +997,69 @@ class TestChannelManager:
             assert [msg.text for msg in outbound_received] == ["Hello", "Hello world", "Hello world"]
             assert [msg.is_final for msg in outbound_received] == [False, False, True]
             assert all(msg.thread_ts == "om-source-1" for msg in outbound_received)
+
+        _run(go())
+
+    def test_streaming_outbound_metadata_includes_run_and_platform_user(self, monkeypatch):
+        from app.channels.manager import ChannelManager
+
+        monkeypatch.setattr("app.channels.manager.STREAM_UPDATE_MIN_INTERVAL_SECONDS", 0.0)
+
+        async def go():
+            bus = MessageBus()
+            store = ChannelStore(path=Path(tempfile.mkdtemp()) / "store.json")
+            manager = ChannelManager(bus=bus, store=store)
+
+            outbound_received = []
+
+            async def capture_outbound(msg):
+                outbound_received.append(msg)
+
+            bus.subscribe_outbound(capture_outbound)
+
+            stream_events = [
+                _make_stream_part("metadata", {"run_id": "run-wecom-1"}),
+                _make_stream_part(
+                    "messages-tuple",
+                    [
+                        {"id": "ai-1", "content": "Hello", "type": "AIMessageChunk"},
+                        {"langgraph_node": "agent"},
+                    ],
+                ),
+                _make_stream_part(
+                    "values",
+                    {
+                        "messages": [
+                            {"type": "human", "content": "hi"},
+                            {"type": "ai", "content": "Hello"},
+                        ],
+                        "artifacts": [],
+                    },
+                ),
+            ]
+
+            mock_client = _make_mock_langgraph_client()
+            mock_client.runs.stream = MagicMock(return_value=_make_async_iterator(stream_events))
+            manager._client = mock_client
+
+            await manager.start()
+
+            inbound = InboundMessage(
+                channel_name="wecom",
+                chat_id="chat1",
+                user_id="WuZhongHui",
+                text="hi",
+                thread_ts="wecom-msg-1",
+                metadata={"aibotid": "bot-1"},
+            )
+            await bus.publish_inbound(inbound)
+            await _wait_for(lambda: any(m.is_final for m in outbound_received))
+            await manager.stop()
+
+            final_msg = next(m for m in outbound_received if m.is_final)
+            assert final_msg.metadata["run_id"] == "run-wecom-1"
+            assert final_msg.metadata["platform_user_id"] == "WuZhongHui"
+            assert final_msg.metadata["aibotid"] == "bot-1"
 
         _run(go())
 
@@ -2075,7 +2139,13 @@ class TestWeComChannel:
 
             await channel._publish_ws_inbound(frame, "hello", files=files)
 
-            channel._ws_client.reply_stream.assert_awaited_once_with(frame, "stream-1", "Working on it...", False)
+            channel._ws_client.reply_stream.assert_awaited_once_with(
+                frame,
+                "stream-1",
+                "Working on it...",
+                False,
+                feedback={"id": "deerflow:wecom:msg-1"},
+            )
             bus.publish_inbound.assert_awaited_once()
 
             inbound = bus.publish_inbound.await_args.args[0]
@@ -2117,7 +2187,132 @@ class TestWeComChannel:
 
             await channel._publish_ws_inbound(frame, "hello")
 
-            channel._ws_client.reply_stream.assert_awaited_once_with(frame, "stream-1", "Please wait...", False)
+            channel._ws_client.reply_stream.assert_awaited_once_with(
+                frame,
+                "stream-1",
+                "Please wait...",
+                False,
+                feedback={"id": "deerflow:wecom:msg-1"},
+            )
+
+        _run(go())
+
+    def test_on_ws_feedback_event_logs_key_fields(self, caplog):
+        from app.channels.wecom import WeComChannel
+
+        async def go():
+            bus = MessageBus()
+            channel = WeComChannel(bus, config={})
+
+            frame = {
+                "body": {
+                    "msgid": "evt-1",
+                    "chatid": "chat-1",
+                    "from": {"userid": "user-1"},
+                    "aibotid": "bot-1",
+                    "chattype": "single",
+                    "event": {
+                        "eventtype": "feedback_event",
+                        "feedback_event": {
+                            "id": "deerflow:wecom:msg-1",
+                            "type": 2,
+                            "content": "not good enough",
+                            "inaccurate_reason_list": [3],
+                        },
+                    },
+                }
+            }
+
+            with caplog.at_level(logging.INFO, logger="app.channels.wecom"):
+                await channel._on_ws_feedback_event(frame)
+
+            assert "feedback_id=deerflow:wecom:msg-1" in caplog.text
+            assert "type=2" in caplog.text
+            assert "content=not good enough" in caplog.text
+            assert "reasons=[3]" in caplog.text
+            assert "user_id=user-1" in caplog.text
+            assert "chat_id=chat-1" in caplog.text
+            assert "msg_id=evt-1" in caplog.text
+
+        _run(go())
+
+    def test_on_ws_feedback_event_records_negative_feedback_with_reason_labels(self):
+        from app.channels.wecom import WeComChannel
+
+        async def go():
+            bus = MessageBus()
+            channel = WeComChannel(bus, config={})
+            repo = SimpleNamespace(record_channel_feedback=AsyncMock(return_value={"feedback_id": "fb-1"}))
+            channel._feedback_repo = repo
+
+            frame = {
+                "body": {
+                    "msgid": "evt-1",
+                    "chatid": "chat-1",
+                    "from": {"userid": "WuZhongHui"},
+                    "aibotid": "bot-1",
+                    "chattype": "single",
+                    "event": {
+                        "eventtype": "feedback_event",
+                        "feedback_event": {
+                            "id": "deerflow:wecom:msg-1",
+                            "type": 2,
+                            "content": "放得开上了飞机",
+                            "inaccurate_reason_list": [1, 4],
+                        },
+                    },
+                }
+            }
+
+            await channel._on_ws_feedback_event(frame)
+
+            repo.record_channel_feedback.assert_awaited_once_with(
+                native_feedback_id="deerflow:wecom:msg-1",
+                channel_name="wecom",
+                rating=-1,
+                platform_user_id="WuZhongHui",
+                comment="与问题无关；数据分析错误\n补充反馈：放得开上了飞机",
+            )
+
+        _run(go())
+
+    def test_final_wecom_outbound_records_native_feedback_target(self):
+        from app.channels.wecom import WeComChannel
+
+        async def go():
+            bus = MessageBus()
+            channel = WeComChannel(bus, config={})
+            repo = SimpleNamespace(upsert_channel_feedback_target=AsyncMock())
+            channel._feedback_repo = repo
+
+            frame = {"body": {"msgid": "msg-1"}}
+            ws_client = SimpleNamespace(reply_stream=AsyncMock())
+            channel._ws_client = ws_client
+            channel._ws_frames["msg-1"] = frame
+            channel._ws_stream_ids["msg-1"] = "stream-1"
+
+            await channel.send(
+                OutboundMessage(
+                    channel_name="wecom",
+                    chat_id="chat-1",
+                    thread_id="thread-1",
+                    text="done",
+                    is_final=True,
+                    thread_ts="msg-1",
+                    metadata={"run_id": "run-1", "platform_user_id": "WuZhongHui"},
+                )
+            )
+
+            ws_client.reply_stream.assert_awaited_once_with(frame, "stream-1", "done", True)
+            repo.upsert_channel_feedback_target.assert_awaited_once_with(
+                native_feedback_id="deerflow:wecom:msg-1",
+                channel_name="wecom",
+                chat_id="chat-1",
+                platform_user_id="WuZhongHui",
+                platform_message_id="msg-1",
+                thread_id="thread-1",
+                run_id="run-1",
+            )
 
         _run(go())
 

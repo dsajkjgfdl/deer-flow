@@ -79,4 +79,4 @@ backend/.deer-flow/agents/hr-boss-agent/*
 my_doc/
 
 docs/
-tmp_*
+tmp*
