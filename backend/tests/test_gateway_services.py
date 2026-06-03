@@ -487,6 +487,58 @@ def test_resolve_and_apply_effective_runtime_adds_agent_context(monkeypatch):
     assert body.metadata["agent_config_hash"] == "config-hash"
 
 
+def test_resolve_and_apply_effective_runtime_ignores_bootstrap_target_agent(monkeypatch):
+    """Bootstrap creates a new custom agent, so its target name must not be pre-resolved."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.gateway import services
+    from deerflow.agents.runtime_resolver import EffectiveAgentRuntime
+
+    repo = object()
+    app_config = object()
+    user = SimpleNamespace(id="user-1", system_role="user")
+    body = SimpleNamespace(
+        assistant_id="lead_agent",
+        config=None,
+        context={"agent_name": "new-agent", "is_bootstrap": True},
+        metadata=None,
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(user=user),
+        app=SimpleNamespace(state=SimpleNamespace(platform_repo=repo)),
+    )
+
+    async def fake_resolve_effective_agent_runtime(**kwargs):
+        assert kwargs == {
+            "user": user,
+            "requested_agent_name": None,
+            "platform_repo": repo,
+            "app_config": app_config,
+        }
+        return EffectiveAgentRuntime(
+            user_id="user-1",
+            requested_agent_name=None,
+            agent_name=None,
+            effective_mcp_servers=[],
+            effective_skills=None,
+            effective_allowed_tools=None,
+            trace_metadata={"agent_name": "default"},
+        )
+
+    monkeypatch.setattr(services, "get_app_config", lambda: app_config)
+    monkeypatch.setattr(services, "resolve_effective_agent_runtime", fake_resolve_effective_agent_runtime)
+
+    asyncio.run(services.resolve_and_apply_effective_runtime(body, request))
+
+    assert body.context["agent_name"] == "new-agent"
+    assert body.context["is_bootstrap"] is True
+    assert body.context["effective_mcp_servers"] == []
+    assert body.context["effective_skills"] is None
+    assert body.context["effective_allowed_tools"] is None
+    assert body.metadata["agent_name"] == "default"
+
+
 def test_build_run_config_with_context():
     """When caller sends 'context', prefer it over 'configurable'."""
     from app.gateway.services import build_run_config

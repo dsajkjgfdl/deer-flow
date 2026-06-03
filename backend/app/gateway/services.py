@@ -189,7 +189,25 @@ def _normalize_requested_agent_name(value: Any) -> str | None:
     return _normalize_custom_assistant_id(value)
 
 
+def _is_bootstrap_request(body: Any) -> bool:
+    body_context = getattr(body, "context", None)
+    if isinstance(body_context, Mapping) and body_context.get("is_bootstrap") is True:
+        return True
+
+    request_config = getattr(body, "config", None)
+    if isinstance(request_config, Mapping):
+        for key in ("context", "configurable"):
+            config_context = request_config.get(key)
+            if isinstance(config_context, Mapping) and config_context.get("is_bootstrap") is True:
+                return True
+
+    return False
+
+
 def _requested_agent_name_from_body(body: Any) -> str | None:
+    if _is_bootstrap_request(body):
+        return None
+
     body_context = getattr(body, "context", None)
     if isinstance(body_context, Mapping) and body_context.get("agent_name") is not None:
         return _normalize_requested_agent_name(body_context["agent_name"])
