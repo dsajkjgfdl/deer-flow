@@ -58,9 +58,52 @@ Text2Cypher 在生成 Cypher 前会先执行字段值纠错转换，并把结果
 
 ## 组织口径
 
-当用户在组织限定中说“股份”或“股份公司”时，“股份”“股份公司”指福建火炬电子科技股份有限公司，应作为该组织的明确别名处理，不应触发组织澄清。生成 Cypher 时应追加 `Employee.current_org_name = "福建火炬电子科技股份有限公司"` 或等价的 `Organization.org_name = "福建火炬电子科技股份有限公司"` 组织过滤。
+当用户在组织限定中说“股份”或“股份公司”时，“股份”“股份公司”指福建火炬电子科技股份有限公司，应作为该组织的明确别名处理，不应触发组织澄清。生成 Cypher 时应追加 `Employee.current_org_name = "福建火炬电子科技股份有限公司"` 或等价的 `Organization.org_name = "福建火炬电子科技股份有限公司"` 组织过滤。若 schema 或数据中当前组织树使用 `福建火炬电子科技股份有限公司（本部）` 表示股份公司本部，则股份公司组织树筛选应兼容 `福建火炬电子科技股份有限公司` 和 `福建火炬电子科技股份有限公司（本部）`；涉及 `OrgUnit` 层级筛选时，优先使用实际存在的 `OrgUnit.org_name`、`OrgUnit.full_path` 或员工当前组织字段值，不要因为只匹配不带“（本部）”的公司名而返回 0。
 
 用户问“子公司”“各子公司”“公司”“组织”“单位”等分组统计时，统一视为组织维度；图谱侧优先使用 `Employee.current_org_name` 作为当前组织/子公司字段。该类泛化维度词不是具体组织名称，不应因为 term_resolution 无法匹配到单个 `Organization.org_name` 字段值而触发澄清；只要 Cypher 已使用 `Employee.current_org_name`、`Organization.org_name` 或 `BELONGS_TO_ORGANIZATION` 表达组织维度，即可继续查询。
+
+## 组织层级筛选口径
+
+当前员工口径和组织层级筛选口径必须分开处理。
+
+`CURRENTLY_IN_DEPARTMENT` / `CURRENTLY_IN_POSITION` 只负责判断员工是否属于当前员工。不要使用 OrgUnit 判断当前员工，也不要因为员工存在 `CURRENTLY_ASSIGNED_TO_ORG_UNIT`、组织路径或组织归属字段就把他纳入当前员工统计。
+
+`OrgUnit` 组织树负责解释“中心、部门、车间、小组、班组”等组织层级归属。用户问“某中心/某部门/某车间/某小组的人数、名单、平均值、职称、证书、排名、占比”等员工统计问题时，优先使用 `CURRENTLY_ASSIGNED_TO_ORG_UNIT` + `CONTAINS_ORG_UNIT` 做组织架构层级筛选，并向下包含所有子级组织单元；不要只用 `Department.department_name` 精确匹配作为新版组织架构下部门查询的唯一口径。
+
+生成 Cypher 时，应先限定当前员工，再按组织树筛选员工当前组织架构路径。标准形态为：员工通过 `CURRENTLY_ASSIGNED_TO_ORG_UNIT` 指向当前所在叶子或本级组织单元，目标组织单元通过 `CONTAINS_ORG_UNIT*0..` 向下包含该组织单元。`*0..` 用于同时包含目标组织单元本级和所有下级组织单元。
+
+```cypher
+MATCH (e:Employee)
+MATCH (e)-[:CURRENTLY_ASSIGNED_TO_ORG_UNIT]->(leaf:OrgUnit)
+MATCH (target:OrgUnit)-[:CONTAINS_ORG_UNIT*0..]->(leaf)
+WHERE (
+    (e)-[:CURRENTLY_IN_DEPARTMENT]->(:Department)
+    OR (e)-[:CURRENTLY_IN_POSITION]->(:Position)
+  )
+  AND target.org_unit_name = "IT部"
+RETURN count(DISTINCT e) AS employee_count
+```
+
+如果用户同时给出公司或组织范围，例如“股份公司 IT部有多少人”，应在当前员工范围内追加公司/组织过滤，同时继续使用 `OrgUnit` 层级筛选 IT部。股份公司本部数据常见组织名包括 `福建火炬电子科技股份有限公司` 和 `福建火炬电子科技股份有限公司（本部）`，生成查询时应按 schema 中实际存在的值兼容处理：
+
+```cypher
+MATCH (e:Employee)
+MATCH (e)-[:CURRENTLY_ASSIGNED_TO_ORG_UNIT]->(leaf:OrgUnit)
+MATCH (target:OrgUnit)-[:CONTAINS_ORG_UNIT*0..]->(leaf)
+WHERE (
+    (e)-[:CURRENTLY_IN_DEPARTMENT]->(:Department)
+    OR (e)-[:CURRENTLY_IN_POSITION]->(:Position)
+  )
+  AND (
+    e.current_org_name IN ["福建火炬电子科技股份有限公司", "福建火炬电子科技股份有限公司（本部）"]
+    OR target.org_name IN ["福建火炬电子科技股份有限公司", "福建火炬电子科技股份有限公司（本部）"]
+    OR target.full_path CONTAINS "福建火炬电子科技股份有限公司（本部）"
+  )
+  AND target.org_unit_name = "IT部"
+RETURN count(DISTINCT e) AS employee_count
+```
+
+例如员工实际挂在 `火炬电子_福建火炬电子科技股份有限公司（本部）_信息管理中心_IT部_软件开发组`，查询 `IT部员工` 时必须把 `软件开发组` 下的当前员工纳入统计。`Department` 可以作为兼容旧图谱或补充展示的口径，但当 schema 中存在 `OrgUnit`、`CURRENTLY_ASSIGNED_TO_ORG_UNIT` 和 `CONTAINS_ORG_UNIT` 时，部门/中心/小组筛选必须优先走组织架构树。
 
 ## 当前员工口径
 
