@@ -22,6 +22,7 @@ class AgentCatalogEntry(BaseModel):
     tool_groups: list[str] | None = None
     skills: list[str] | None = None
     mcp_servers: list[str] | None = None
+    allowed_tools: list[str] | None = None
     config_path: str
     soul_path: str | None = None
     config_hash: str
@@ -178,6 +179,7 @@ def scan_agent_catalog(*, app_config: Any | None = None, user_id: str | None = N
                 tool_groups=agent_config.tool_groups,
                 skills=agent_config.skills,
                 mcp_servers=agent_config.mcp_servers,
+                allowed_tools=agent_config.allowed_tools,
                 config_path=str(config_path),
                 soul_path=str(soul_path) if soul_path.exists() else None,
                 config_hash=_sha256_file(config_path),

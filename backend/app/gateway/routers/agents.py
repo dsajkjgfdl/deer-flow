@@ -28,6 +28,7 @@ class AgentResponse(BaseModel):
     model: str | None = Field(default=None, description="Optional model override")
     tool_groups: list[str] | None = Field(default=None, description="Optional tool group whitelist")
     mcp_servers: list[str] | None = Field(default=None, description="Optional MCP server whitelist")
+    allowed_tools: list[str] | None = Field(default=None, description="Optional exact tool whitelist")
     skills: list[str] | None = Field(default=None, description="Optional skill whitelist (None=all, []=none)")
     soul: str | None = Field(default=None, description="SOUL.md content")
 
@@ -102,6 +103,7 @@ def _agent_config_to_response(agent_cfg: AgentConfig, include_soul: bool = False
         model=agent_cfg.model,
         tool_groups=agent_cfg.tool_groups,
         mcp_servers=agent_cfg.mcp_servers,
+        allowed_tools=agent_cfg.allowed_tools,
         skills=agent_cfg.skills,
         soul=soul,
     )
@@ -316,6 +318,9 @@ async def update_agent(name: str, request: AgentUpdateRequest) -> AgentResponse:
             new_tool_groups = request.tool_groups if "tool_groups" in fields_set else agent_cfg.tool_groups
             if new_tool_groups is not None:
                 updated["tool_groups"] = new_tool_groups
+
+            if agent_cfg.allowed_tools is not None:
+                updated["allowed_tools"] = agent_cfg.allowed_tools
 
             # skills: None = inherit all, [] = no skills, ["a","b"] = whitelist
             if "skills" in fields_set:

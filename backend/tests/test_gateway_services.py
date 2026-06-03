@@ -471,6 +471,7 @@ def test_resolve_and_apply_effective_runtime_adds_agent_context(monkeypatch):
             agent_name="hr-boss-agent",
             effective_mcp_servers=["text2cypher"],
             effective_skills=["hr-boss"],
+            effective_allowed_tools=["ask_clarification", "text2cypher_answer_question"],
             trace_metadata={"agent_config_hash": "config-hash"},
         )
 
@@ -482,6 +483,7 @@ def test_resolve_and_apply_effective_runtime_adds_agent_context(monkeypatch):
     assert body.context["agent_name"] == "hr-boss-agent"
     assert body.context["effective_mcp_servers"] == ["text2cypher"]
     assert body.context["effective_skills"] == ["hr-boss"]
+    assert body.context["effective_allowed_tools"] == ["ask_clarification", "text2cypher_answer_question"]
     assert body.metadata["agent_config_hash"] == "config-hash"
 
 

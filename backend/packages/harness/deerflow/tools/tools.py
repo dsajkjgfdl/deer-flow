@@ -49,6 +49,14 @@ def filter_mcp_tools_by_server_names[ToolT](tools: list[ToolT], allowed_servers:
     return [tool for tool in tools if getattr(tool, "name", "").startswith(prefixes)]
 
 
+def filter_tools_by_allowed_names[ToolT](tools: list[ToolT], allowed_tools: list[str] | None) -> list[ToolT]:
+    """Filter tools to an exact allowlist, preserving allow-all when omitted."""
+    if allowed_tools is None:
+        return tools
+    allowed = set(allowed_tools)
+    return [tool for tool in tools if getattr(tool, "name", "") in allowed]
+
+
 def get_available_tools(
     groups: list[str] | None = None,
     include_mcp: bool = True,
@@ -56,6 +64,7 @@ def get_available_tools(
     subagent_enabled: bool = False,
     *,
     mcp_servers: list[str] | None = None,
+    allowed_tools: list[str] | None = None,
     app_config: AppConfig | None = None,
 ) -> list[BaseTool]:
     """Get all available tools from config.
@@ -94,7 +103,10 @@ def get_available_tools(
                 cfg.use,
             )
 
-    loaded_tools = [_ensure_sync_invocable_tool(t) for _, t in loaded_tools_raw]
+    loaded_tools = filter_tools_by_allowed_names(
+        [_ensure_sync_invocable_tool(t) for _, t in loaded_tools_raw],
+        allowed_tools,
+    )
 
     # Conditionally add tools based on config
     builtin_tools = BUILTIN_TOOLS.copy()
@@ -118,6 +130,7 @@ def get_available_tools(
     if model_config is not None and model_config.supports_vision:
         builtin_tools.append(view_image_tool)
         logger.info(f"Including view_image_tool for model '{model_name}' (supports_vision=True)")
+    builtin_tools = filter_tools_by_allowed_names(builtin_tools, allowed_tools)
 
     # Get cached MCP tools if enabled
     # NOTE: We use ExtensionsConfig.from_file() instead of config.extensions
@@ -134,12 +147,14 @@ def get_available_tools(
             if extensions_config.get_enabled_mcp_servers():
                 mcp_tools = get_cached_mcp_tools()
                 mcp_tools = filter_mcp_tools_by_server_names(mcp_tools, mcp_servers)
+                mcp_tools = filter_tools_by_allowed_names(mcp_tools, allowed_tools)
                 if mcp_tools:
                     logger.info(f"Using {len(mcp_tools)} cached MCP tool(s)")
 
-                    # When tool_search is enabled, register MCP tools in the
-                    # deferred registry and add tool_search to builtin tools.
-                    if config.tool_search.enabled:
+                    # Agent-level allowlists are exact tool surfaces. When a
+                    # whitelist is active, keep the selected MCP tools directly
+                    # callable and do not leak the meta tool_search entry.
+                    if config.tool_search.enabled and allowed_tools is None:
                         from deerflow.tools.builtins.tool_search import DeferredToolRegistry, set_deferred_registry
                         from deerflow.tools.builtins.tool_search import tool_search as tool_search_tool
 
@@ -206,6 +221,7 @@ def get_available_tools(
             acp_agents = getattr(config, "acp_agents", {}) or {}
         if acp_agents:
             acp_tools.append(build_invoke_acp_agent_tool(acp_agents))
+            acp_tools = filter_tools_by_allowed_names(acp_tools, allowed_tools)
             logger.info(f"Including invoke_acp_agent tool ({len(acp_agents)} agent(s): {list(acp_agents.keys())})")
     except Exception as e:
         logger.warning(f"Failed to load ACP tool: {e}")

@@ -30,6 +30,7 @@ def test_scan_agent_catalog_returns_valid_file_backed_agent(tmp_path):
             "model": "qwen3.5-plus",
             "tool_groups": ["file:read"],
             "mcp_servers": ["hr-graphrag-qa", "text2cypher"],
+            "allowed_tools": ["ask_clarification", "text2cypher_answer_question"],
             "skills": ["hr-boss"],
         },
     )
@@ -64,6 +65,7 @@ def test_scan_agent_catalog_returns_valid_file_backed_agent(tmp_path):
     assert entry.validation_errors == []
     assert entry.skills == ["hr-boss"]
     assert entry.mcp_servers == ["hr-graphrag-qa", "text2cypher"]
+    assert entry.allowed_tools == ["ask_clarification", "text2cypher_answer_question"]
     assert entry.config_hash
     assert entry.soul_hash
 

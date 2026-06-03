@@ -18,6 +18,7 @@ class EffectiveAgentRuntime(BaseModel):
     tool_groups: list[str] | None = None
     effective_skills: list[str] | None = None
     effective_mcp_servers: list[str] = Field(default_factory=list)
+    effective_allowed_tools: list[str] | None = None
     config_hash: str | None = None
     soul_hash: str | None = None
     trace_metadata: dict[str, Any] = Field(default_factory=dict)
@@ -56,6 +57,7 @@ def _default_runtime(user_id: str, requested_agent_name: str | None = None) -> E
         tool_groups=None,
         effective_skills=None,
         effective_mcp_servers=[],
+        effective_allowed_tools=None,
         trace_metadata={"agent_name": "default"},
     )
 
@@ -70,6 +72,7 @@ def _runtime_from_entry(user_id: str, requested_agent_name: str | None, entry: A
         tool_groups=entry.tool_groups,
         effective_skills=entry.skills,
         effective_mcp_servers=_effective_mcp_servers(entry),
+        effective_allowed_tools=entry.allowed_tools,
         config_hash=entry.config_hash,
         soul_hash=entry.soul_hash,
         trace_metadata={
@@ -78,6 +81,7 @@ def _runtime_from_entry(user_id: str, requested_agent_name: str | None, entry: A
             "agent_soul_hash": entry.soul_hash,
             "effective_mcp_servers": _effective_mcp_servers(entry),
             "effective_skills": entry.skills,
+            "effective_allowed_tools": entry.allowed_tools,
         },
     )
 

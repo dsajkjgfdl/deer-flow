@@ -404,6 +404,9 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     effective_mcp_servers = cfg.get("effective_mcp_servers")
     if effective_mcp_servers is None and agent_config and agent_config.mcp_servers is not None:
         effective_mcp_servers = agent_config.mcp_servers
+    effective_allowed_tools = cfg.get("effective_allowed_tools")
+    if effective_allowed_tools is None and agent_config and agent_config.allowed_tools is not None:
+        effective_allowed_tools = agent_config.allowed_tools
     # Custom agent model from agent config (if any), or None to let _resolve_model_name pick the default
     agent_model_name = agent_config.model if agent_config and agent_config.model else None
 
@@ -442,6 +445,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             "is_plan_mode": is_plan_mode,
             "subagent_enabled": subagent_enabled,
             "tool_groups": agent_config.tool_groups if agent_config else None,
+            "allowed_tools": effective_allowed_tools,
             "available_skills": sorted(available_skills) if available_skills is not None else None,
         }
     )
@@ -470,6 +474,8 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
         }
         if effective_mcp_servers is not None:
             bootstrap_tool_kwargs["mcp_servers"] = effective_mcp_servers
+        if effective_allowed_tools is not None:
+            bootstrap_tool_kwargs["allowed_tools"] = effective_allowed_tools
         tools = get_available_tools(**bootstrap_tool_kwargs) + [setup_agent]
         return create_agent(
             model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, app_config=resolved_app_config, attach_tracing=False),
@@ -486,7 +492,9 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
 
     # Custom agents can update their own SOUL.md / config via update_agent.
     # The default agent (no agent_name) does not see this tool.
-    extra_tools = [update_agent] if agent_name else []
+    extra_tools = []
+    if agent_name and (effective_allowed_tools is None or "update_agent" in effective_allowed_tools):
+        extra_tools.append(update_agent)
     # Default lead agent (unchanged behavior)
     tool_kwargs = {
         "model_name": model_name,
@@ -496,6 +504,8 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     }
     if effective_mcp_servers is not None:
         tool_kwargs["mcp_servers"] = effective_mcp_servers
+    if effective_allowed_tools is not None:
+        tool_kwargs["allowed_tools"] = effective_allowed_tools
     tools = get_available_tools(**tool_kwargs)
     return create_agent(
         model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort, app_config=resolved_app_config, attach_tracing=False),

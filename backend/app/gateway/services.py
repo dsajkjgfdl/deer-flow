@@ -253,6 +253,7 @@ async def resolve_and_apply_effective_runtime(body: Any, request: Request):
         body_context["agent_name"] = effective_runtime.agent_name
     body_context["effective_mcp_servers"] = effective_runtime.effective_mcp_servers
     body_context["effective_skills"] = effective_runtime.effective_skills
+    body_context["effective_allowed_tools"] = effective_runtime.effective_allowed_tools
 
     metadata = getattr(body, "metadata", None)
     if not isinstance(metadata, dict):

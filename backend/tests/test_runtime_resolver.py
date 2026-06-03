@@ -28,6 +28,7 @@ def _catalog_entry(name: str = "hr-boss-agent"):
         tool_groups=["file:read"],
         skills=["hr-boss"],
         mcp_servers=["hr-graphrag-qa", "text2cypher", "disabled-mcp"],
+        allowed_tools=["ask_clarification", "text2cypher_answer_question"],
         config_path="/tmp/config.yaml",
         config_hash="config-hash",
         soul_hash="soul-hash",
@@ -63,6 +64,7 @@ async def test_admin_can_resolve_any_valid_agent(monkeypatch):
     assert effective.agent_name == "hr-boss-agent"
     assert effective.effective_skills == ["hr-boss"]
     assert effective.effective_mcp_servers == ["hr-graphrag-qa", "text2cypher"]
+    assert effective.effective_allowed_tools == ["ask_clarification", "text2cypher_answer_question"]
     assert effective.config_hash == "config-hash"
     assert effective.soul_hash == "soul-hash"
 

@@ -16,15 +16,17 @@ description: 当 hr-boss-agent 面向领导回答任何 HR 问题时，尤其是
 ## 路由总则
 
 - Text2Cypher 负责精确问题。凡是平均、人数、名单、排名、占比、筛选、年龄、工龄、职称、证书、人员清单、部门清单这类问题，优先使用 Text2Cypher。
-- Text2Cypher 有两条合法路径：常规领导问答优先调用 `text2cypher_answer_question`；当需要审查、验证、修复或展示 Cypher 时，允许使用低层工具链。
+- Text2Cypher 在本 agent 中只有一个合法入口：`text2cypher_answer_question`。低层 Cypher 生成、校验和执行工具属于评测或排障通道，不属于面向领导问答的可用工具。
 - GraphRAG basic 负责简单证据片段查找，调用 `hr-graphrag-qa_query_basic`。
 - GraphRAG local 负责具体人、具体岗位、具体部门、具体公司、具体项目等实体问题，调用 `hr-graphrag-qa_query_local`。
 - GraphRAG global 负责组织画像、人才结构、群体趋势、整体风险、跨部门分布，调用 `hr-graphrag-qa_query_global`。
 - GraphRAG drift 负责探索式、跨群体、从整体追到局部的线索发现，调用 `hr-graphrag-qa_query_drift`。
 
-## Text2Cypher 双路径
+## Text2Cypher 单入口
 
-快路径适用于普通领导问答：调用 `text2cypher_answer_question`，拿到精确答案后转写成面向领导的结论。普通领导问答不得请求或依赖调试字段；只有用户明确要求调试、评测脚本需要记录查询，或排障时，才允许请求包含 Cypher、校验、schema、raw output 的调试结果。
+普通领导问答只调用 `text2cypher_answer_question`，拿到精确答案后转写成面向领导的结论。不得请求或依赖调试字段，不得在本 agent 中展示原始 Cypher、schema、raw output 或内部校验结果。
+
+如果用户明确要求查看、验证、调试或解释 Cypher，说明当前领导问答模式不展示底层查询，可提供统计口径、结果限制和需要走调试通道的说明；不要尝试调用低层 Text2Cypher 工具。
 
 ## 公司口径澄清
 
@@ -44,24 +46,7 @@ description: 当 hr-boss-agent 面向领导回答任何 HR 问题时，尤其是
 
 多轮对话中调用 Text2Cypher 时，要把“原始问题 + 用户澄清”合并成一个自洽问题。不要只把第二轮澄清文本传给 Text2Cypher，否则会丢失原始姓名、称呼、部门或上下文线索。
 
-低层路径适用于需要更强可控性的场景，按顺序调用：
-
-1. `text2cypher_prepare_schema`
-2. `text2cypher_get_schema`
-3. `text2cypher_generate_cypher`
-4. `text2cypher_validate_cypher`
-5. `text2cypher_execute_cypher`
-
-以下情况优先考虑低层路径：
-
-- 用户明确要求查看、验证、调试或解释 Cypher。
-- `text2cypher_answer_question` 失败、口径不清或结果看起来不可信。
-- 问题包含复杂筛选、多跳关系链、多条件聚合，需要确认查询口径。
-- 评测或排障时需要记录生成的查询、校验结果和执行结果。
-
-使用低层路径时，除非用户要求调试细节，最终回答仍然不要展示原始 Cypher，只输出领导能读懂的结论、依据和限制。
-
-低层路径必须遵守 `generate -> validate -> execute`。每一条新 Cypher，不管是主查询、补充明细查询还是修复后的查询，都必须先调用 `text2cypher_validate_cypher`；验证通过后才能调用 `text2cypher_execute_cypher`，不得直接执行。验证或执行提示中文标点、全角逗号、语法错误时，先修复 Cypher 并重新验证，不要把同类错误查询继续交给执行工具。
+本 agent 不调用 `text2cypher_prepare_schema`、`text2cypher_get_schema`、`text2cypher_resolve_terms`、`text2cypher_generate_cypher`、`text2cypher_validate_cypher` 或 `text2cypher_execute_cypher`。如果 `text2cypher_answer_question` 失败、口径不清、结果看起来不可信，或问题复杂到需要审查查询口径，应按 `answer_question` 的顶层契约给出限制说明、追问用户，或说明需要进入独立调试通道；不要在领导问答中自行拆解低层链路。
 
 Text2Cypher 的 `answer_question` 会默认做字段值纠错转换，并在工具结果中返回 `term_resolution`。当 `term_resolution.needs_clarification=true` 时，最终回答必须先向管理层确认候选口径，不要继续编造查询结论。当 `term_resolution.mappings` 中已有 canonical mapping 时，最终回答可以用自然语言说明“我已按系统中的正式名称口径匹配为 XXX”，但不要展示内部 JSON。
 
@@ -69,9 +54,7 @@ Text2Cypher 的 `answer_question` 会默认做字段值纠错转换，并在工�
 
 处理 `text2cypher_answer_question` 结果时，必须先看顶层契约字段，再看执行结果中的业务列和业务记录。只要 `answer_question` 返回的顶层 `status` 不是 `success`，或 `answerable=false`，最终回答就必须按失败、限制或追问处理；不得引用同一工具结果里的 `generated_cypher`、`normalized_cypher`、`validation`、`schema_text`、`raw_output` 或 execution summary 推导结论。即使该结果里附带了已执行的 Cypher，也只能作为调试线索，不能作为领导答案。
 
-Text2Cypher 的 `answer_question` 也可能返回结构化失败契约字段：`status`、`answerable`、`should_retry`、`limitation`。如果 `status` 是 `needs_clarification`、`insufficient_data`、`no_reliable_evidence` 或 `query_failed`，并且 `should_retry=false`，应立即停止低层工具链重试，按 `limitation` 给出领导可理解的限制说明或追问问题。不要为了“再试试”继续调用 `generate_cypher`、`validate_cypher`、`execute_cypher`。只有 `should_retry=true` 或用户明确要求调试查询时，才允许进入低层路径。
-
-低层调试字段值纠错转换时，可以调用 `text2cypher_resolve_terms` 查看候选。完整低层路径为 `text2cypher_prepare_schema` -> `text2cypher_resolve_terms` -> `text2cypher_get_schema` -> `text2cypher_generate_cypher` -> `text2cypher_validate_cypher` -> `text2cypher_execute_cypher`，其中每一条新 Cypher 仍必须先校验再执行。
+Text2Cypher 的 `answer_question` 也可能返回结构化失败契约字段：`status`、`answerable`、`should_retry`、`limitation`。如果 `status` 是 `needs_clarification`、`insufficient_data`、`no_reliable_evidence` 或 `query_failed`，应按 `limitation` 给出领导可理解的限制说明或追问问题。不要为了“再试试”调用任何低层 Text2Cypher 工具。
 
 ## 业务口径来源
 
@@ -84,7 +67,7 @@ Text2Cypher 的具体业务口径以 Text2Cypher MCP 加载的 HR Boss profile �
 | --- | --- | --- |
 | 福建火炬电子科技股份有限公司平均年龄是多少？ | `text2cypher_answer_question` | 平均年龄需要精确聚合，GraphRAG 不能凭材料印象估算。 |
 | 福建火炬电子科技股份有限公司的高级工程师有哪些？ | `text2cypher_answer_question` | 高级工程师名单需要完整筛选，必须以结构化图查询为准。 |
-| 请展示“高级工程师人数”这道题的 Cypher 并验证结果 | `text2cypher_generate_cypher` -> `text2cypher_validate_cypher` -> `text2cypher_execute_cypher` | 这是调试和审查口径，需要低层工具链。 |
+| 请展示“高级工程师人数”这道题的 Cypher 并验证结果 | 不调用低层工具 | 当前 agent 是领导问答模式，不展示底层查询；可说明需要进入独立调试通道。 |
 | 老王1366的教育和项目经历是什么？ | `hr-graphrag-qa_query_local` | 这是具体人员档案和证据关联问题。 |
 | 福建火炬电子科技股份有限公司的人才结构有什么特点？ | `hr-graphrag-qa_query_global` | 这是整体画像和群体结构总结问题。 |
 | 制造车间哪些群体可能存在经验断层？ | `hr-graphrag-qa_query_drift` | 这是探索式风险线索发现问题。 |

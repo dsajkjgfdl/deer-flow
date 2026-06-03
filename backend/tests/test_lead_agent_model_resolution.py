@@ -305,6 +305,7 @@ def test_make_lead_agent_passes_effective_mcp_servers_to_tools(monkeypatch):
             "context": {
                 "model_name": "safe-model",
                 "effective_mcp_servers": ["text2cypher"],
+                "effective_allowed_tools": ["ask_clarification", "text2cypher_answer_question"],
             }
         }
     )
@@ -314,6 +315,7 @@ def test_make_lead_agent_passes_effective_mcp_servers_to_tools(monkeypatch):
         groups=None,
         subagent_enabled=False,
         mcp_servers=["text2cypher"],
+        allowed_tools=["ask_clarification", "text2cypher_answer_question"],
         app_config=app_config,
     )
 

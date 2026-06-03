@@ -17,6 +17,7 @@ class RunnableAgentResponse(BaseModel):
     tool_groups: list[str] | None = None
     skills: list[str] | None = None
     mcp_servers: list[str] | None = None
+    allowed_tools: list[str] | None = None
     status: str
     validation_errors: list[str] = Field(default_factory=list)
     validation_warnings: list[str] = Field(default_factory=list)
@@ -53,6 +54,7 @@ def _to_response(entry: AgentCatalogEntry) -> RunnableAgentResponse:
         tool_groups=entry.tool_groups,
         skills=entry.skills,
         mcp_servers=entry.mcp_servers,
+        allowed_tools=entry.allowed_tools,
         status=entry.status,
         validation_errors=entry.validation_errors,
         validation_warnings=entry.validation_warnings,

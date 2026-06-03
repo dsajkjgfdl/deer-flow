@@ -58,7 +58,7 @@ hr-boss orchestration skill
 
 - `text2cypher_answer_question`
 
-需要查看、验证、修复或解释查询口径时，使用低层工具链：
+`hr-boss-agent` 的领导问答模式只暴露 `text2cypher_answer_question`。需要查看、验证、修复或解释查询口径时，应使用独立评测或排障通道中的低层工具链，而不是由 `hr-boss-agent` 直接调用：
 
 - `text2cypher_prepare_schema`
 - `text2cypher_get_schema`
@@ -66,7 +66,7 @@ hr-boss orchestration skill
 - `text2cypher_validate_cypher`
 - `text2cypher_execute_cypher`
 
-低层工具链必须遵守 `generate -> validate -> execute`。每一条新 Cypher，包括补充明细查询和修复后的查询，都必须先校验，通过后才能执行。
+低层工具链必须遵守 `generate -> validate -> execute`。每一条新 Cypher，包括补充明细查询和修复后的查询，都必须先校验，通过后才能执行。该链路用于工程调试、评测复盘和管理员排障，不属于面向领导的常规问答工具面。
 
 `hr-graphrag-qa` MCP 负责材料证据和语义解释：
 

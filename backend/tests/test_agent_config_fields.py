@@ -22,6 +22,7 @@ def test_load_agent_config_preserves_display_name_and_mcp_servers(tmp_path):
                 "model": "qwen3.5-plus",
                 "tool_groups": ["file:read"],
                 "mcp_servers": ["hr-graphrag-qa", "text2cypher"],
+                "allowed_tools": ["ask_clarification", "text2cypher_answer_question"],
                 "skills": ["hr-boss"],
             },
             allow_unicode=True,
@@ -41,4 +42,5 @@ def test_load_agent_config_preserves_display_name_and_mcp_servers(tmp_path):
     assert cfg.model == "qwen3.5-plus"
     assert cfg.tool_groups == ["file:read"]
     assert cfg.mcp_servers == ["hr-graphrag-qa", "text2cypher"]
+    assert cfg.allowed_tools == ["ask_clarification", "text2cypher_answer_question"]
     assert cfg.skills == ["hr-boss"]

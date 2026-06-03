@@ -169,6 +169,9 @@ def update_agent(
     if tool_groups is not None and tool_groups != existing_cfg.tool_groups:
         updated_fields.append("tool_groups")
 
+    if existing_cfg.allowed_tools is not None:
+        config_data["allowed_tools"] = existing_cfg.allowed_tools
+
     new_skills = skills if skills is not None else existing_cfg.skills
     if new_skills is not None:
         config_data["skills"] = new_skills
