@@ -58,11 +58,13 @@ Text2Cypher 在生成 Cypher 前会先执行字段值纠错转换，并把结果
 
 ## 组织口径
 
-当用户在组织限定中说“股份”或“股份公司”时，“股份”“股份公司”指福建火炬电子科技股份有限公司，应作为该组织的明确别名处理，不应触发组织澄清。生成 Cypher 时应追加 `Employee.current_org_name = "福建火炬电子科技股份有限公司"` 或等价的 `Organization.org_name = "福建火炬电子科技股份有限公司"` 组织过滤。若 schema 或数据中当前组织树使用 `福建火炬电子科技股份有限公司（本部）` 表示股份公司本部，则股份公司组织树筛选应兼容 `福建火炬电子科技股份有限公司` 和 `福建火炬电子科技股份有限公司（本部）`；涉及 `OrgUnit` 层级筛选时，优先使用实际存在的 `OrgUnit.org_name`、`OrgUnit.full_path` 或员工当前组织字段值，不要因为只匹配不带“（本部）”的公司名而返回 0。
+当用户在组织限定中说“股份”“股份公司”或“福建火炬电子科技股份有限公司”时，应映射到数据库中的组织名 `福建火炬电子科技股份有限公司（本部）`，作为该组织的明确别名处理，不应触发组织澄清。生成 Cypher 时应追加 `Employee.current_org_name = "福建火炬电子科技股份有限公司（本部）"` 或等价的 `Organization.org_name = "福建火炬电子科技股份有限公司（本部）"` 组织过滤；涉及 `OrgUnit` 层级筛选时，优先使用实际存在的 `OrgUnit.org_name`、`OrgUnit.full_path` 或员工当前组织字段值，不要因为只匹配不带“（本部）”的公司名而返回 0。
 
 用户问“子公司”“各子公司”“公司”“组织”“单位”等分组统计时，统一视为组织维度；图谱侧优先使用 `Employee.current_org_name` 作为当前组织/子公司字段。该类泛化维度词不是具体组织名称，不应因为 term_resolution 无法匹配到单个 `Organization.org_name` 字段值而触发澄清；只要 Cypher 已使用 `Employee.current_org_name`、`Organization.org_name` 或 `BELONGS_TO_ORGANIZATION` 表达组织维度，即可继续查询。
 
 ## 组织层级筛选口径
+
+集团 HR 图谱的 `OrgUnit.full_path` 组织路径按“集团_子公司_子公司内组织层级...”排列。`火炬电子` 是集团顶层；其下一级通常是子公司或本部组织，例如 `福建火炬电子科技股份有限公司（本部）`；再往下才是该子公司内部的中心、部门、小组等组织单元。解析 `OrgUnit.full_path` 或生成组织层级筛选时，不要把顶层 `火炬电子` 当作子公司，也不要把子公司下的中心、部门误判为公司。用户指定子公司范围时，应优先匹配路径中的第二级组织或员工当前组织字段；用户指定中心、部门、小组时，应在对应公司/子公司范围下继续使用 `CONTAINS_ORG_UNIT*0..` 向下包含所有子级组织单元。
 
 当前员工口径和组织层级筛选口径必须分开处理。
 
@@ -84,7 +86,7 @@ WHERE (
 RETURN count(DISTINCT e) AS employee_count
 ```
 
-如果用户同时给出公司或组织范围，例如“股份公司 IT部有多少人”，应在当前员工范围内追加公司/组织过滤，同时继续使用 `OrgUnit` 层级筛选 IT部。股份公司本部数据常见组织名包括 `福建火炬电子科技股份有限公司` 和 `福建火炬电子科技股份有限公司（本部）`，生成查询时应按 schema 中实际存在的值兼容处理：
+如果用户同时给出公司或组织范围，例如“股份公司 IT部有多少人”，应在当前员工范围内追加公司/组织过滤，同时继续使用 `OrgUnit` 层级筛选 IT部。股份公司本部在数据库中的组织名为 `福建火炬电子科技股份有限公司（本部）`，生成查询时应使用该实际存储值：
 
 ```cypher
 MATCH (e:Employee)
@@ -95,8 +97,8 @@ WHERE (
     OR (e)-[:CURRENTLY_IN_POSITION]->(:Position)
   )
   AND (
-    e.current_org_name IN ["福建火炬电子科技股份有限公司", "福建火炬电子科技股份有限公司（本部）"]
-    OR target.org_name IN ["福建火炬电子科技股份有限公司", "福建火炬电子科技股份有限公司（本部）"]
+    e.current_org_name = "福建火炬电子科技股份有限公司（本部）"
+    OR target.org_name = "福建火炬电子科技股份有限公司（本部）"
     OR target.full_path CONTAINS "福建火炬电子科技股份有限公司（本部）"
   )
   AND target.org_unit_name = "IT部"
@@ -112,7 +114,7 @@ RETURN count(DISTINCT e) AS employee_count
 
 当前员工的主口径为：员工存在当前部门或当前岗位关系。不要仅使用 `BELONGS_TO_ORGANIZATION` 或 `Employee.current_org_name` 判断当前员工，因为离职或辞职员工也可能保留组织归属信息。
 
-对于人数、平均值、名单、排名、占比、筛选、年龄、工龄、职称、证书等精确员工统计问题，如果用户未明确指定公司、组织或部门，也未明确指定“全集团”“全部公司”“所有当前员工”等全局范围，不得默认限定到福建火炬电子科技股份有限公司，也不得直接生成默认全局统计 Cypher。应返回 `status=needs_clarification`、`answerable=false`、`should_retry=false`，并在 `limitation` 或 `clarification_question` 中提示用户先确认统计公司或组织范围。
+对于人数、平均值、名单、排名、占比、筛选、年龄、工龄、职称、证书等精确员工统计问题，如果用户未明确指定公司、组织或部门，也未明确指定“全集团”“全部公司”“所有当前员工”等全局范围，不得默认限定到福建火炬电子科技股份有限公司（本部），也不得直接生成默认全局统计 Cypher。应返回 `status=needs_clarification`、`answerable=false`、`should_retry=false`，并在 `limitation` 或 `clarification_question` 中提示用户先确认统计公司或组织范围。
 
 除非用户明确询问“涉密”“保密”“非涉密”或指定要排除涉密员工，否则当前员工统计不得默认追加 `Employee.confidential_flag` 过滤条件。保密标识不是通用在职员工过滤条件。
 
@@ -141,16 +143,6 @@ RETURN count(DISTINCT e)
 
 统计“985员工”的人数、名单、分组或占比时，仍必须先套用当前员工口径，并使用 `DISTINCT e` 避免同一员工多条教育经历造成重复计数。
 
-## 离职员工口径
- 如果要查“离职员工”，应该结合 EmploymentChange.employment_status 或 change_type：
-```
-  MATCH (e:Employee)-[:BELONGS_TO_ORGANIZATION]->(o:Organization)
-  MATCH (e)-[:HAS_EMPLOYMENT_CHANGE]->(c:EmploymentChange)
-  WHERE o.org_name = "福建火炬电子科技股份有限公司"
-    AND c.end_date STARTS WITH "2199"
-    AND c.employment_status IN ["离职", "辞职", "辞退", "退休", "实习终止", "返聘终止"]
-  RETURN count(DISTINCT e) AS former_employee_count
-```
 
 ## 变动原因因果口径
 
