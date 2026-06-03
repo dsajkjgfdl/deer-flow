@@ -81,3 +81,4 @@ my_doc/
 docs/
 tmp*
 .superpowers/
+.worktrees/
