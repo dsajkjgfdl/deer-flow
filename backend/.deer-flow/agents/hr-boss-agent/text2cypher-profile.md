@@ -8,6 +8,8 @@
 
 本规则优先于默认当前员工口径和所有示例 Cypher。对于人数、平均年龄、平均司龄、名单、排名、占比、筛选、年龄、工龄、职称、证书等精确员工统计问题，如果用户未明确指定公司、组织或部门，也未明确指定“全集团”“全部公司”“所有当前员工”“全体员工”等全局范围，不得默认按全局当前员工查询，不得生成任何统计 Cypher。应返回 `status=needs_clarification`、`answerable=false`、`should_retry=false`，并在 `limitation` 或 `clarification_question` 中提示用户先确认统计公司或组织范围。
 
+“部门分布”只是分组维度，不等于用户已确认全集团范围，也不等于用户已指定某个具体部门。用户只问“员工部门分布”“985员工部门分布”“某类员工的部门分布”但未明确全集团、全部当前员工、具体公司或具体组织范围时，仍必须返回 `status=needs_clarification`，不得默认按全局当前员工生成统计 Cypher。
+
 ## 字段值纠错转换口径
 
 Text2Cypher 在生成 Cypher 前会先执行字段值纠错转换，并把结果记录在 `term_resolution` 中。该阶段只负责把用户口语中的公司、部门、岗位、职称等业务词映射到图谱中真实存在的字段值，不能替代下面的组织、职称、当前员工等业务口径。
@@ -60,7 +62,9 @@ Text2Cypher 在生成 Cypher 前会先执行字段值纠错转换，并把结果
 
 当用户在组织限定中说“股份”“股份公司”或“福建火炬电子科技股份有限公司”时，应映射到数据库中的组织名 `福建火炬电子科技股份有限公司（本部）`，作为该组织的明确别名处理，不应触发组织澄清。生成 Cypher 时应追加 `Employee.current_org_name = "福建火炬电子科技股份有限公司（本部）"` 或等价的 `Organization.org_name = "福建火炬电子科技股份有限公司（本部）"` 组织过滤；涉及 `OrgUnit` 层级筛选时，优先使用实际存在的 `OrgUnit.org_name`、`OrgUnit.full_path` 或员工当前组织字段值，不要因为只匹配不带“（本部）”的公司名而返回 0。
 
-用户问“子公司”“各子公司”“公司”“组织”“单位”等分组统计时，统一视为组织维度；图谱侧优先使用 `Employee.current_org_name` 作为当前组织/子公司字段。该类泛化维度词不是具体组织名称，不应因为 term_resolution 无法匹配到单个 `Organization.org_name` 字段值而触发澄清；只要 Cypher 已使用 `Employee.current_org_name`、`Organization.org_name` 或 `BELONGS_TO_ORGANIZATION` 表达组织维度，即可继续查询。
+福建火炬电子科技股份有限公司（本部）是火炬电子集团下一级的本部/子公司口径，不是集团母公司口径；它下面是中心、部门、小组等内部组织层级，不应表述为“福建火炬电子科技股份有限公司及其下属子公司”。
+
+用户问“子公司”“各子公司”“公司”“组织”“单位”等分组统计时，统一视为组织维度；图谱侧优先使用 `Employee.current_org_name` 作为当前组织/子公司字段。该类泛化维度词不是具体组织名称，不应因为 term_resolution 无法匹配到单个 `Organization.org_name` 字段值而触发术语澄清。该规则只适用于用户已明确全集团、全部当前员工或具体统计范围的场景，不能替代最高优先级公司口径澄清规则；如果问题只给出组织分组维度、没有给出统计范围，仍应先返回 `status=needs_clarification`。
 
 ## 组织层级筛选口径
 
@@ -69,6 +73,10 @@ Text2Cypher 在生成 Cypher 前会先执行字段值纠错转换，并把结果
 当前员工口径和组织层级筛选口径必须分开处理。
 
 `CURRENTLY_IN_DEPARTMENT` / `CURRENTLY_IN_POSITION` 只负责判断员工是否属于当前员工。不要使用 OrgUnit 判断当前员工，也不要因为员工存在 `CURRENTLY_ASSIGNED_TO_ORG_UNIT`、组织路径或组织归属字段就把他纳入当前员工统计。
+
+当用户确认按部门口径查询时，仍必须使用 `OrgUnit` 层级筛选对应的部门、中心、车间、小组或班组。`Department` 只可用于当前员工口径判断，不得使用 `Department.department_name`、`Department.org_name` 或 `CURRENTLY_IN_DEPARTMENT` 关系上的 `Department` 节点作为部门名称筛选入口，也不要生成 `MATCH (e)-[:CURRENTLY_IN_DEPARTMENT]->(d:Department) WHERE d.department_name ...` 这类部门筛选 Cypher。即使 term resolution 将“研发”“IT部”等词映射到 `Department` 候选，只要用户确认的是部门/组织层级口径，生成 Cypher 时也应改用 `CURRENTLY_ASSIGNED_TO_ORG_UNIT` + `CONTAINS_ORG_UNIT*0..`，并通过 `OrgUnit.org_unit_name`、`OrgUnit.full_path` 或实际存在的 OrgUnit 字段筛选。
+
+用户问“部门分布”“员工部门分布”“某类员工的部门分布”等分组统计时，默认按 `OrgUnit.center_name` 聚合，作为面向领导汇报的中心层级口径；不得按 `Employee.current_department_name` 聚合，也不得按 `Department.department_name` 聚合，以免小组、班组、科室等过细层级导致分布碎片化。只有用户明确要求“按最细部门”“按小组/班组/科室分布”时，才使用更细的组织层级字段；逐人明细中可以展示员工当前部门字段，但分布聚合仍优先使用 `OrgUnit.center_name`。标准形态为：先按当前员工口径限定员工，再匹配 `CURRENTLY_ASSIGNED_TO_ORG_UNIT` 的当前组织叶子，使用 `leaf.center_name` 做分组字段，并按分组有效值规则过滤空值、`未填写`、`未知`、`无`、`N/A`。回答口径说明应写为“按中心口径/中心层级汇总”或“按中心归属汇总”，不要表述为“当前所属部门”，避免让用户误解为按最细部门字段聚合。
 
 `OrgUnit` 组织树负责解释“中心、部门、车间、小组、班组”等组织层级归属。用户问“某中心/某部门/某车间/某小组的人数、名单、平均值、职称、证书、排名、占比”等员工统计问题时，优先使用 `CURRENTLY_ASSIGNED_TO_ORG_UNIT` + `CONTAINS_ORG_UNIT` 做组织架构层级筛选，并向下包含所有子级组织单元；不要只用 `Department.department_name` 精确匹配作为新版组织架构下部门查询的唯一口径。
 
