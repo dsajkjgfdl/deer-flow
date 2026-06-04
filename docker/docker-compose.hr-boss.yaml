@@ -1,0 +1,117 @@
+# HR Boss deployment overlay.
+#
+# Usage from repository root:
+#   set -a && . deployment/hr-boss/.env && set +a
+#   docker compose -p hr-boss -f docker/docker-compose.yaml -f docker/docker-compose.hr-boss.yaml --profile rebuild run --build --rm hr-data-builder
+#   docker compose -p hr-boss -f docker/docker-compose.yaml -f docker/docker-compose.hr-boss.yaml up -d --build nginx frontend gateway neo4j mysql
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: hr-boss-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-hr}
+      MYSQL_USER: ${MYSQL_USER:-hr}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+      TZ: Asia/Shanghai
+    ports:
+      - "${MYSQL_PUBLISHED_PORT:-3306}:3306"
+    volumes:
+      - hr-boss-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - deer-flow
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:5
+    container_name: hr-boss-neo4j
+    environment:
+      NEO4J_AUTH: ${TEXT2CYPHER_NEO4J_USERNAME:-neo4j}/${TEXT2CYPHER_NEO4J_PASSWORD:?set TEXT2CYPHER_NEO4J_PASSWORD}
+      NEO4J_dbms_default__database: ${TEXT2CYPHER_NEO4J_DATABASE:-neo4j}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+      NEO4J_dbms_security_procedures_allowlist: apoc.*
+      TZ: Asia/Shanghai
+    ports:
+      - "${NEO4J_HTTP_PUBLISHED_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PUBLISHED_PORT:-7687}:7687"
+    volumes:
+      - hr-boss-neo4j-data:/data
+      - hr-boss-neo4j-logs:/logs
+      - hr-boss-neo4j-plugins:/plugins
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - deer-flow
+    restart: unless-stopped
+
+  hr-data-builder:
+    build:
+      context: ../
+      dockerfile: deployment/hr-boss/Dockerfile.data-builder
+    container_name: hr-boss-data-builder
+    profiles:
+      - rebuild
+    depends_on:
+      mysql:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    volumes:
+      - ${HR_KG_SOURCE_DIR:?set HR_KG_SOURCE_DIR}:/app/hr-kg-source:ro
+      - ${GRAPHRAG_MCP_REPO:?set GRAPHRAG_MCP_REPO}:/app/graphrag-mcp:ro
+      - ${BYOG_GRAPHRAG_ROOT:?set BYOG_GRAPHRAG_ROOT}:/app/byog_graphrag
+    environment:
+      HR_EXCEL_PATH: /app/hr-kg-source/${HR_EXCEL_FILE:-基本信息_filled_new.xlsx}
+      HR_IMPORT_SCRIPT: /app/hr-kg-source/${HR_IMPORT_SCRIPT_FILE:-import_compressed.py}
+      GRAPHRAG_DATA_ROOT: /app/byog_graphrag
+      PYTHONPATH: /app/byog_graphrag/src:/app/graphrag-mcp/src
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_USER:-hr}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-hr}
+      MYSQL_CHARSET: ${MYSQL_CHARSET:-utf8mb4}
+      BYOG_NEO4J_URI: bolt://neo4j:7687
+      BYOG_NEO4J_USERNAME: ${TEXT2CYPHER_NEO4J_USERNAME:-neo4j}
+      BYOG_NEO4J_PASSWORD: ${TEXT2CYPHER_NEO4J_PASSWORD:?set TEXT2CYPHER_NEO4J_PASSWORD}
+      BYOG_NEO4J_DATABASE: ${TEXT2CYPHER_NEO4J_DATABASE:-neo4j}
+    command: >
+      sh -c "if [ \"$${HR_DATA_BUILDER_INSTALL_DEPS:-true}\" = \"true\" ]; then
+      python -m pip install --no-cache-dir -e /app/graphrag-mcp -e /app/byog_graphrag;
+      fi;
+      python /app/deployment/hr-boss/rebuild_hr_kg.py --force"
+    networks:
+      - deer-flow
+    restart: "no"
+
+  gateway:
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    volumes:
+      - ../scripts:/app/scripts:ro
+      - ../backend/.deer-flow/agents:/app/backend/.deer-flow/agents:ro
+      - ${TEXT2CYPHER_REPO:?set TEXT2CYPHER_REPO}:/opt/hr-mcp/text2cypher:ro
+      - ${GRAPHRAG_MCP_REPO:?set GRAPHRAG_MCP_REPO}:/opt/hr-mcp/graphrag-mcp:ro
+      - ${BYOG_GRAPHRAG_ROOT:?set BYOG_GRAPHRAG_ROOT}:/data/hr/graphrag/byog_graphrag:ro
+    environment:
+      TEXT2CYPHER_NEO4J_URI: bolt://neo4j:7687
+      TEXT2CYPHER_NEO4J_USERNAME: ${TEXT2CYPHER_NEO4J_USERNAME:-neo4j}
+      TEXT2CYPHER_NEO4J_PASSWORD: ${TEXT2CYPHER_NEO4J_PASSWORD:?set TEXT2CYPHER_NEO4J_PASSWORD}
+      TEXT2CYPHER_NEO4J_DATABASE: ${TEXT2CYPHER_NEO4J_DATABASE:-neo4j}
+
+volumes:
+  hr-boss-mysql-data:
+  hr-boss-neo4j-data:
+  hr-boss-neo4j-logs:
+  hr-boss-neo4j-plugins:
