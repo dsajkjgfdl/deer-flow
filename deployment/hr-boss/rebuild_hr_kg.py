@@ -33,6 +33,36 @@ def log(message: str) -> None:
     print(message, flush=True)
 
 
+def excel_path() -> Path:
+    return Path(env("HR_EXCEL_PATH", "/app/hr-kg-source/基本信息_filled_new.xlsx")).resolve()
+
+
+def import_script_path() -> Path:
+    return Path(env("HR_IMPORT_SCRIPT", "/app/hr-kg-source/import_compressed.py")).resolve()
+
+
+def graphrag_root_path() -> Path:
+    return Path(env("GRAPHRAG_DATA_ROOT", "/app/byog_graphrag")).resolve()
+
+
+def preflight() -> None:
+    excel = excel_path()
+    if not excel.is_file():
+        raise RuntimeError(f"Excel file does not exist: {excel}")
+
+    import_script = import_script_path()
+    if not import_script.is_file():
+        raise RuntimeError(f"Import script does not exist: {import_script}")
+
+    graphrag_root = graphrag_root_path()
+    if not graphrag_root.is_dir():
+        raise RuntimeError(f"GRAPHRAG_DATA_ROOT does not exist: {graphrag_root}")
+
+    log(f"Preflight OK: excel={excel}")
+    log(f"Preflight OK: import_script={import_script}")
+    log(f"Preflight OK: graphrag_root={graphrag_root}")
+
+
 def run(command: list[str], *, cwd: Path | None = None) -> None:
     log("$ " + " ".join(command))
     subprocess.run(command, cwd=str(cwd) if cwd else None, check=True)
@@ -117,7 +147,7 @@ def clear_neo4j() -> None:
 
 
 def clear_graphrag_dirs() -> None:
-    root = Path(env("GRAPHRAG_DATA_ROOT", "/app/byog_graphrag")).resolve()
+    root = graphrag_root_path()
     if not root.exists():
         raise RuntimeError(f"GRAPHRAG_DATA_ROOT does not exist: {root}")
     for name in MANAGED_GRAPHRAG_DIRS:
@@ -132,17 +162,13 @@ def clear_graphrag_dirs() -> None:
 
 
 def import_excel_to_mysql() -> None:
-    excel_path = Path(env("HR_EXCEL_PATH", "/app/hr-kg-source/基本信息_filled_new.xlsx")).resolve()
-    import_script = Path(env("HR_IMPORT_SCRIPT", "/app/hr-kg-source/import_compressed.py")).resolve()
-    if not excel_path.exists():
-        raise RuntimeError(f"Excel file does not exist: {excel_path}")
-    if not import_script.exists():
-        raise RuntimeError(f"Import script does not exist: {import_script}")
+    excel = excel_path()
+    import_script = import_script_path()
 
     command = [
         sys.executable,
         str(import_script),
-        str(excel_path),
+        str(excel),
         "--host",
         env("MYSQL_HOST", "mysql"),
         "--port",
@@ -160,7 +186,7 @@ def import_excel_to_mysql() -> None:
 
 
 def strict_sync_all() -> None:
-    root = Path(env("GRAPHRAG_DATA_ROOT", "/app/byog_graphrag")).resolve()
+    root = graphrag_root_path()
     command = [
         sys.executable,
         "-m",
@@ -204,6 +230,7 @@ def main() -> None:
         raise RuntimeError("This rebuild is destructive. Re-run with --force.")
 
     log("HR KG rebuild start")
+    preflight()
     clear_mysql()
     clear_neo4j()
     clear_graphrag_dirs()
@@ -214,4 +241,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

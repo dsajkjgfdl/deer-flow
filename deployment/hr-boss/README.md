@@ -39,9 +39,13 @@ set -a
 set +a
 ```
 
+`deployment/hr-boss/.env` should include `DEER_FLOW_REPO_ROOT=/opt/deer-flow` so Docker can map host-side skill paths correctly.
+
 Rebuild data from Excel:
 
 ```bash
+ls -la /data/hr/source
+
 docker compose -p hr-boss \
   -f docker/docker-compose.yaml \
   -f docker/docker-compose.hr-boss.yaml \
@@ -68,3 +72,5 @@ http://SERVER_IP:2026
 The rebuild job is destructive: it clears MySQL, clears Neo4j, removes generated GraphRAG folders, imports the Excel file, then runs BYOG `strict-sync-all`.
 
 Do not run the rebuild job on every application restart. Run it only for first deployment or after replacing the source Excel file.
+
+If the rebuild reports `Excel file does not exist`, check `HR_KG_SOURCE_DIR` and `HR_EXCEL_FILE` in `deployment/hr-boss/.env`. The host directory is mounted to `/app/hr-kg-source` inside the container.

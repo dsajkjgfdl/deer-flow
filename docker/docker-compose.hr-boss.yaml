@@ -86,8 +86,10 @@ services:
       BYOG_NEO4J_PASSWORD: ${TEXT2CYPHER_NEO4J_PASSWORD:?set TEXT2CYPHER_NEO4J_PASSWORD}
       BYOG_NEO4J_DATABASE: ${TEXT2CYPHER_NEO4J_DATABASE:-neo4j}
     command: >
-      sh -c "if [ \"$${HR_DATA_BUILDER_INSTALL_DEPS:-true}\" = \"true\" ]; then
-      python -m pip install --no-cache-dir -e /app/graphrag-mcp -e /app/byog_graphrag;
+      sh -ec "if [ \"$${HR_DATA_BUILDER_INSTALL_DEPS:-true}\" = \"true\" ]; then
+      rm -rf /tmp/graphrag-mcp;
+      cp -a /app/graphrag-mcp /tmp/graphrag-mcp;
+      python -m pip install --no-cache-dir -e /tmp/graphrag-mcp -e /app/byog_graphrag;
       fi;
       python /app/deployment/hr-boss/rebuild_hr_kg.py --force"
     networks:

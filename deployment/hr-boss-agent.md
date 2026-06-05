@@ -198,6 +198,7 @@ TEXT2CYPHER_NEO4J_PASSWORD=your_password
 TEXT2CYPHER_NEO4J_DATABASE=neo4j
 
 # DeerFlow
+DEER_FLOW_REPO_ROOT=/opt/deer-flow
 DEER_FLOW_HOME=/data/deer-flow
 DEER_FLOW_CONFIG_PATH=/opt/deer-flow/config.yaml
 DEER_FLOW_EXTENSIONS_CONFIG_PATH=/opt/deer-flow/extensions_config.hr-boss.json
@@ -397,6 +398,8 @@ set +a
 这是破坏性步骤，会清 MySQL、清 Neo4j、删除 GraphRAG 生成目录，然后从 Excel 全量重建。
 
 ```bash
+ls -la /data/hr/source
+
 docker compose -p hr-boss \
   -f docker/docker-compose.yaml \
   -f docker/docker-compose.hr-boss.yaml \
@@ -475,6 +478,7 @@ curl -s http://127.0.0.1:2026/api/mcp/config
 | --- | --- |
 | Gateway 启动后 MCP 工具不可用 | `extensions_config.json` 中对应 MCP 是否 `enabled: true`；`hr-boss-agent/config.yaml` 是否列入 `mcp_servers`；Gateway 日志里是否有 stdio 子进程启动错误。 |
 | Docker 内 MCP 路径不存在 | `gateway.volumes` 是否挂载了 MCP 仓库和数据目录；`extensions_config.json` 是否写容器内路径，不是宿主机独有路径。 |
+| `Excel file does not exist` | 检查 `deployment/hr-boss/.env` 中的 `HR_KG_SOURCE_DIR` 和 `HR_EXCEL_FILE`；宿主机目录会挂载为容器内 `/app/hr-kg-source`。 |
 | Text2Cypher 查询失败 | Neo4j 地址、用户名、密码、数据库名；Neo4j 是否允许 Bolt 访问；HR 图谱是否已导入。 |
 | GraphRAG 回答无证据 | `GRAPHRAG_DATA_ROOT` 是否指向当前 BYOG 数据；数据目录是否挂入容器；GraphRAG MCP 仓库依赖是否安装。 |
 | 领导问答输出底层 Cypher 或 JSON | 检查 `hr-boss-agent/config.yaml` 的 `allowed_tools`，不要暴露低层 Text2Cypher 工具；检查 `skills/custom/hr-boss/SKILL.md` 是否仍是唯一编排合同。 |
