@@ -17,6 +17,7 @@ Prepare these paths on the server:
 /opt/hr-mcp/graphrag-mcp               # GraphRAG MCP repo, with Linux .venv
 /data/hr/source                        # 基本信息_filled_new.xlsx + import_compressed.py
 /data/hr/graphrag/byog_graphrag        # BYOG GraphRAG project/data root
+/data/hr/logs/text2cypher              # writable Text2Cypher MCP logs
 /data/deer-flow                        # DeerFlow runtime state
 ```
 
@@ -25,6 +26,8 @@ Prepare these paths on the server:
 Copy and edit env values:
 
 ```bash
+mkdir -p /data/hr/logs/text2cypher
+
 cp .env.example .env
 cp frontend/.env.example frontend/.env
 cp deployment/hr-boss/.env.example deployment/hr-boss/.env

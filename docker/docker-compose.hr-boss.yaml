@@ -106,6 +106,7 @@ services:
       - ${TEXT2CYPHER_REPO:?set TEXT2CYPHER_REPO}:/opt/hr-mcp/text2cypher:ro
       - ${GRAPHRAG_MCP_REPO:?set GRAPHRAG_MCP_REPO}:/opt/hr-mcp/graphrag-mcp:ro
       - ${BYOG_GRAPHRAG_ROOT:?set BYOG_GRAPHRAG_ROOT}:/data/hr/graphrag/byog_graphrag:ro
+      - ${HR_TEXT2CYPHER_LOG_DIR:-/data/hr/logs/text2cypher}:/data/hr/logs/text2cypher
     environment:
       TEXT2CYPHER_NEO4J_URI: bolt://neo4j:7687
       TEXT2CYPHER_NEO4J_USERNAME: ${TEXT2CYPHER_NEO4J_USERNAME:-neo4j}

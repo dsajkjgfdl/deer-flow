@@ -31,11 +31,13 @@
         "TEXT2CYPHER_OPENAI_API_KEY": "$DASHSCOPE_API_KEY",
         "TEXT2CYPHER_OPENAI_BASE_URL": "https://api.deepseek.com",
         "TEXT2CYPHER_OPENAI_MODEL": "deepseek-v4-pro",
-        "TEXT2CYPHER_TRACE_ENABLED": "true"
+        "TEXT2CYPHER_LOG_PATH": "/data/hr/logs/text2cypher/text2cypher.log",
+        "TEXT2CYPHER_MCP_CALL_LOG_PATH": "/data/hr/logs/text2cypher/mcp_calls.jsonl",
+        "TEXT2CYPHER_TRACE_ENABLED": "true",
+        "TEXT2CYPHER_TRACE_PATH": "/data/hr/logs/text2cypher/text2cypher_trace.md"
       },
       "description": "Local Text2Cypher engine via MCP"
     }
   },
   "skills": {}
 }
-

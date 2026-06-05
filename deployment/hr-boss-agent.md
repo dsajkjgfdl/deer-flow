@@ -93,6 +93,7 @@ docker compose -p hr-boss \
 /opt/hr-mcp/graphrag-mcp               # GraphRAG MCP 仓库
 /data/hr/source                        # 基本信息_filled_new.xlsx + import_compressed.py
 /data/hr/graphrag/byog_graphrag        # GraphRAG 索引数据
+/data/hr/logs/text2cypher              # Text2Cypher MCP 可写日志目录
 /data/deer-flow                        # DeerFlow 运行态数据 DEER_FLOW_HOME
 /data/neo4j                            # Neo4j 数据卷
 /data/mysql                            # MySQL 数据卷
@@ -184,6 +185,7 @@ HR_IMPORT_SCRIPT_FILE=import_compressed.py
 TEXT2CYPHER_REPO=/opt/hr-mcp/text2cypher
 GRAPHRAG_MCP_REPO=/opt/hr-mcp/graphrag-mcp
 BYOG_GRAPHRAG_ROOT=/data/hr/graphrag/byog_graphrag
+HR_TEXT2CYPHER_LOG_DIR=/data/hr/logs/text2cypher
 
 # MySQL 构建中间库
 MYSQL_ROOT_PASSWORD=replace_with_mysql_root_password
@@ -493,6 +495,7 @@ curl -s http://127.0.0.1:2026/api/mcp/config
 | Docker 内 MCP 路径不存在 | `gateway.volumes` 是否挂载了 MCP 仓库和数据目录；`extensions_config.json` 是否写容器内路径，不是宿主机独有路径。 |
 | `No such file or directory: '/opt/hr-mcp/.../.venv/bin/python'` | 对应外部 MCP 仓库的 `.venv/bin/python` 在 Gateway 容器内不可执行。常见原因是宿主机 `uv sync` 生成了指向 `/root/.local/share/uv/...` 的软链接；用 `python -m venv --copies` 在 Docker 一次性容器里重建 `.venv`。 |
 | `Text2Cypher launcher not found under: /opt/hr-mcp/text2cypher` | `TEXT2CYPHER_REPO` 指向的不是完整 Text2Cypher 仓库。当前包装器支持 `scripts/run_text2cypher_mcp.py` 或包内 `text2cypher/adapters/mcp/server.py` 两种结构，至少要存在一种。 |
+| `Failed to write text2cypher MCP call log` / `Read-only file system: '/opt/hr-mcp/text2cypher/logs'` | Text2Cypher 默认想把日志写回只读挂载的 MCP 仓库。设置 `HR_TEXT2CYPHER_LOG_DIR=/data/hr/logs/text2cypher`，并让 `TEXT2CYPHER_LOG_PATH`、`TEXT2CYPHER_MCP_CALL_LOG_PATH`、`TEXT2CYPHER_TRACE_PATH` 指向 `/data/hr/logs/text2cypher` 下。 |
 | 企微消息触发 `langgraph_sdk.errors.AuthenticationError: 401 Unauthorized` | `GATEWAY_WORKERS` 应设为 `1`。当前内部频道调用使用进程内随机 token，多 worker 下请求可能被另一个 worker 接住导致 token 不匹配。 |
 | `Excel file does not exist` | 检查 `deployment/hr-boss/.env` 中的 `HR_KG_SOURCE_DIR` 和 `HR_EXCEL_FILE`；宿主机目录会挂载为容器内 `/app/hr-kg-source`。 |
 | Text2Cypher 查询失败 | Neo4j 地址、用户名、密码、数据库名；Neo4j 是否允许 Bolt 访问；HR 图谱是否已导入。 |
@@ -563,3 +566,12 @@ docker compose --env-file deployment/hr-boss/.env -p hr-boss ...
 ```
 
 所以结论是：**前置文件、路径、密钥、外部 MCP 仓库都准备好之后，这两个命令跑通，就可以认为部署完成。** 跑完后再看 `gateway` 日志，确认 MCP 没有路径或依赖错误，然后访问 `http://服务器IP:2026` 测试 `hr-boss-agent`。
+
+查看 Gateway 日志：
+
+```bash
+docker compose --env-file deployment/hr-boss/.env -p hr-boss \
+  -f docker/docker-compose.yaml \
+  -f docker/docker-compose.hr-boss.yaml \
+  logs -f --tail=100 gateway
+```
