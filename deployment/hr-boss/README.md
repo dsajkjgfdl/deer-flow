@@ -41,6 +41,28 @@ set +a
 
 `deployment/hr-boss/.env` should include `DEER_FLOW_REPO_ROOT=/opt/deer-flow` so Docker can map host-side skill paths correctly.
 
+For WeCom/channel deployment, keep `GATEWAY_WORKERS=1`. Channel calls use a process-local internal auth token, so multiple Gateway workers can reject each other's internal LangGraph requests with 401.
+
+Prepare external MCP virtual environments on the server before starting Gateway:
+
+```bash
+cd /opt/hr-mcp/text2cypher
+test -f scripts/run_text2cypher_mcp.py || test -f text2cypher/adapters/mcp/server.py
+rm -rf .venv
+docker run --rm -v "$PWD":/work -w /work python:3.12-slim-bookworm \
+  sh -lc 'python -m venv --copies .venv && . .venv/bin/activate && pip install -U pip && pip install -e .'
+test -x .venv/bin/python
+
+cd /opt/hr-mcp/graphrag-mcp
+test -d src
+rm -rf .venv
+docker run --rm -v "$PWD":/work -w /work python:3.12-slim-bookworm \
+  sh -lc 'python -m venv --copies .venv && . .venv/bin/activate && pip install -U pip && pip install -e .'
+test -x .venv/bin/python
+```
+
+Do not rely on a host `uv sync` venv whose `.venv/bin/python` links to `/root/.local/share/uv/...`; that symlink can be valid on the host but broken inside the Gateway container.
+
 Rebuild data from Excel:
 
 ```bash

@@ -202,6 +202,7 @@ DEER_FLOW_REPO_ROOT=/opt/deer-flow
 DEER_FLOW_HOME=/data/deer-flow
 DEER_FLOW_CONFIG_PATH=/opt/deer-flow/config.yaml
 DEER_FLOW_EXTENSIONS_CONFIG_PATH=/opt/deer-flow/extensions_config.hr-boss.json
+GATEWAY_WORKERS=1
 BETTER_AUTH_SECRET=replace_with_random_hex
 
 # 企业微信入口，可选
@@ -349,11 +350,23 @@ channels:
 
 ```bash
 cd /opt/hr-mcp/text2cypher
-uv sync
+test -f scripts/run_text2cypher_mcp.py || test -f text2cypher/adapters/mcp/server.py
+rm -rf .venv
+docker run --rm -v "$PWD":/work -w /work python:3.12-slim-bookworm \
+  sh -lc 'python -m venv --copies .venv && . .venv/bin/activate && pip install -U pip && pip install -e .'
+test -x .venv/bin/python
 
 cd /opt/hr-mcp/graphrag-mcp
-uv sync
+test -d src
+rm -rf .venv
+docker run --rm -v "$PWD":/work -w /work python:3.12-slim-bookworm \
+  sh -lc 'python -m venv --copies .venv && . .venv/bin/activate && pip install -U pip && pip install -e .'
+test -x .venv/bin/python
 ```
+
+如果这里任意一个 `test -x .venv/bin/python` 失败，Gateway 就无法通过 stdio 拉起对应 MCP，日志会出现类似 `No such file or directory: '/opt/hr-mcp/graphrag-mcp/.venv/bin/python'`。
+
+不要只在宿主机执行 `uv sync` 后检查软链接是否存在。`uv sync` 创建的 `.venv/bin/python` 可能指向宿主机的 `/root/.local/share/uv/...`，该路径在 Gateway 容器内不存在，会导致宿主机看着存在、容器里启动失败。
 
 快速检查启动包装器：
 
@@ -478,6 +491,9 @@ curl -s http://127.0.0.1:2026/api/mcp/config
 | --- | --- |
 | Gateway 启动后 MCP 工具不可用 | `extensions_config.json` 中对应 MCP 是否 `enabled: true`；`hr-boss-agent/config.yaml` 是否列入 `mcp_servers`；Gateway 日志里是否有 stdio 子进程启动错误。 |
 | Docker 内 MCP 路径不存在 | `gateway.volumes` 是否挂载了 MCP 仓库和数据目录；`extensions_config.json` 是否写容器内路径，不是宿主机独有路径。 |
+| `No such file or directory: '/opt/hr-mcp/.../.venv/bin/python'` | 对应外部 MCP 仓库的 `.venv/bin/python` 在 Gateway 容器内不可执行。常见原因是宿主机 `uv sync` 生成了指向 `/root/.local/share/uv/...` 的软链接；用 `python -m venv --copies` 在 Docker 一次性容器里重建 `.venv`。 |
+| `Text2Cypher launcher not found under: /opt/hr-mcp/text2cypher` | `TEXT2CYPHER_REPO` 指向的不是完整 Text2Cypher 仓库。当前包装器支持 `scripts/run_text2cypher_mcp.py` 或包内 `text2cypher/adapters/mcp/server.py` 两种结构，至少要存在一种。 |
+| 企微消息触发 `langgraph_sdk.errors.AuthenticationError: 401 Unauthorized` | `GATEWAY_WORKERS` 应设为 `1`。当前内部频道调用使用进程内随机 token，多 worker 下请求可能被另一个 worker 接住导致 token 不匹配。 |
 | `Excel file does not exist` | 检查 `deployment/hr-boss/.env` 中的 `HR_KG_SOURCE_DIR` 和 `HR_EXCEL_FILE`；宿主机目录会挂载为容器内 `/app/hr-kg-source`。 |
 | Text2Cypher 查询失败 | Neo4j 地址、用户名、密码、数据库名；Neo4j 是否允许 Bolt 访问；HR 图谱是否已导入。 |
 | GraphRAG 回答无证据 | `GRAPHRAG_DATA_ROOT` 是否指向当前 BYOG 数据；数据目录是否挂入容器；GraphRAG MCP 仓库依赖是否安装。 |
@@ -521,7 +537,7 @@ curl -s http://127.0.0.1:2026/api/mcp/config
 第一个命令：
 
 ```bash
-docker compose -p hr-boss \
+docker compose --env-file deployment/hr-boss/.env -p hr-boss \
   -f docker/docker-compose.yaml \
   -f docker/docker-compose.hr-boss.yaml \
   --profile rebuild run --build --rm hr-data-builder
@@ -532,7 +548,7 @@ docker compose -p hr-boss \
 第二个命令：
 
 ```bash
-docker compose -p hr-boss \
+docker compose --env-file deployment/hr-boss/.env -p hr-boss \
   -f docker/docker-compose.yaml \
   -f docker/docker-compose.hr-boss.yaml \
   up -d --build nginx frontend gateway neo4j mysql
