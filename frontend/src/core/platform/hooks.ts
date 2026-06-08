@@ -3,6 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchFeedbackConversation,
   fetchFeedbackSummary,
+  fetchMonitoringConversation,
+  fetchMonitoringRunTimeline,
+  fetchRecentMonitoringConversations,
   fetchRecentFeedback,
   grantUserAgent,
   listAdminAudit,
@@ -14,6 +17,8 @@ import {
   listUserAgentAssignments,
   revokeUserAgent,
 } from "./api";
+
+import type { MonitoringConversationFilters } from "./api";
 
 export function useAgentCatalog() {
   const { data, isLoading, error } = useQuery({
@@ -124,6 +129,38 @@ export function useToolMonitoring() {
     isLoading,
     error,
   };
+}
+
+export function useMonitoringConversations(
+  filters: MonitoringConversationFilters = {},
+) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["platform", "admin", "monitoring", "conversations", filters],
+    queryFn: () => fetchRecentMonitoringConversations(filters),
+  });
+  return {
+    page: data ?? { items: [], total: 0, limit: 50, offset: 0 },
+    isLoading,
+    error,
+  };
+}
+
+export function useMonitoringConversation(threadId: string | null) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["platform", "admin", "monitoring", "conversations", threadId],
+    queryFn: () => fetchMonitoringConversation(threadId!),
+    enabled: Boolean(threadId),
+  });
+  return { conversation: data ?? null, isLoading, error };
+}
+
+export function useMonitoringRunTimeline(runId: string | null) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["platform", "admin", "monitoring", "runs", runId, "timeline"],
+    queryFn: () => fetchMonitoringRunTimeline(runId!),
+    enabled: Boolean(runId),
+  });
+  return { timeline: data ?? null, isLoading, error };
 }
 
 export function useFeedbackSummary() {

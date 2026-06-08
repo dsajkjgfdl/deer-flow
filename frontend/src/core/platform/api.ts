@@ -8,6 +8,9 @@ import type {
   FeedbackConversation,
   FeedbackRecord,
   FeedbackSummary,
+  MonitoringConversationDetail,
+  MonitoringConversationsPage,
+  MonitoringRunTimeline,
   PlatformAgent,
   PlatformUsersPage,
   RunMonitoringItem,
@@ -15,6 +18,15 @@ import type {
   ToolMonitoringItem,
   UserAgentAssignments,
 } from "./types";
+
+export interface MonitoringConversationFilters {
+  limit?: number;
+  offset?: number;
+  source?: string;
+  agent_name?: string;
+  status?: string;
+  q?: string;
+}
 
 async function readJsonOrThrow<T>(res: Response, fallback: string): Promise<T> {
   if (res.ok) return res.json() as Promise<T>;
@@ -135,6 +147,54 @@ export async function listToolMonitoring(): Promise<{
     items: ToolMonitoringItem[];
     recent_failures: ToolFailureItem[];
   }>(res, `Failed to load tool monitoring: ${res.statusText}`);
+}
+
+export async function fetchRecentMonitoringConversations(
+  filters: MonitoringConversationFilters = {},
+): Promise<MonitoringConversationsPage> {
+  const { limit = 50, offset = 0, ...optionalFilters } = filters;
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+
+  for (const [key, value] of Object.entries(optionalFilters)) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string" && value.trim() === "") continue;
+    params.set(key, String(value));
+  }
+
+  const res = await fetch(
+    `${getBackendBaseURL()}/api/platform/admin/monitoring/conversations/recent?${params.toString()}`,
+  );
+  return readJsonOrThrow<MonitoringConversationsPage>(
+    res,
+    `Failed to load monitoring conversations: ${res.statusText}`,
+  );
+}
+
+export async function fetchMonitoringConversation(
+  threadId: string,
+): Promise<MonitoringConversationDetail> {
+  const res = await fetch(
+    `${getBackendBaseURL()}/api/platform/admin/monitoring/conversations/${encodeURIComponent(threadId)}`,
+  );
+  return readJsonOrThrow<MonitoringConversationDetail>(
+    res,
+    `Failed to load monitoring conversation: ${res.statusText}`,
+  );
+}
+
+export async function fetchMonitoringRunTimeline(
+  runId: string,
+): Promise<MonitoringRunTimeline> {
+  const res = await fetch(
+    `${getBackendBaseURL()}/api/platform/admin/monitoring/runs/${encodeURIComponent(runId)}/timeline`,
+  );
+  return readJsonOrThrow<MonitoringRunTimeline>(
+    res,
+    `Failed to load monitoring run timeline: ${res.statusText}`,
+  );
 }
 
 export async function fetchFeedbackSummary(): Promise<FeedbackSummary> {

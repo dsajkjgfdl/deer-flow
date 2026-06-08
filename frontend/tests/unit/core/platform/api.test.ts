@@ -175,3 +175,90 @@ test("fetchFeedbackConversation requests an admin feedback conversation", async 
     ),
   );
 });
+
+test("fetchRecentMonitoringConversations requests the default recent conversation page", async () => {
+  fetchWithAuth.mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      items: [
+        {
+          identity: {
+            identity_type: "channel",
+            identity_source: "feishu",
+            identity_display: "feishu: ou_xxx",
+            raw_identity: { channel_user_id: "ou_xxx", chat_id: "oc_xxx" },
+          },
+          thread_id: "thread-im",
+          latest_run_id: "run-im",
+          agent_name: "hr-boss-agent",
+          last_message: "研发部门有多少人？",
+          status: "error",
+          error_summary: "backend unavailable",
+          updated_at: "2026-06-08T05:39:22+00:00",
+          updated_at_bj: "2026-06-08 13:39:22",
+        },
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    }),
+  });
+
+  const { fetchRecentMonitoringConversations } =
+    await import("@/core/platform/api");
+
+  await expect(fetchRecentMonitoringConversations()).resolves.toMatchObject({
+    limit: 50,
+    items: [
+      { thread_id: "thread-im", identity: { identity_source: "feishu" } },
+    ],
+  });
+  expect(fetchWithAuth).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "/api/platform/admin/monitoring/conversations/recent?limit=50&offset=0",
+    ),
+  );
+});
+
+test("fetchMonitoringRunTimeline requests one run timeline", async () => {
+  fetchWithAuth.mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      run: { run_id: "run-im", thread_id: "thread-im", status: "error" },
+      identity: {
+        identity_type: "channel",
+        identity_source: "feishu",
+        identity_display: "feishu: ou_xxx",
+        raw_identity: { channel_user_id: "ou_xxx" },
+      },
+      events: [
+        {
+          seq: 1,
+          occurred_at: "2026-06-08T05:39:24+00:00",
+          occurred_at_bj: "2026-06-08 13:39:24",
+          kind: "tool.error",
+          title: "text2cypher_answer_question 调用失败",
+          status: "error",
+          duration_ms: 842,
+          source: "tool_audit",
+          tool_name: "text2cypher_answer_question",
+          mcp_server_name: "text2cypher",
+          content: { error: "timeout" },
+          metadata: {},
+        },
+      ],
+    }),
+  });
+
+  const { fetchMonitoringRunTimeline } = await import("@/core/platform/api");
+
+  await expect(fetchMonitoringRunTimeline("run-im")).resolves.toMatchObject({
+    run: { run_id: "run-im" },
+    events: [{ kind: "tool.error" }],
+  });
+  expect(fetchWithAuth).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "/api/platform/admin/monitoring/runs/run-im/timeline",
+    ),
+  );
+});

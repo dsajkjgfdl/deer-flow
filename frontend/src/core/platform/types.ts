@@ -153,3 +153,78 @@ export interface FeedbackConversation {
   feedback: FeedbackRecord;
   messages: FeedbackConversationMessage[];
 }
+
+export type MonitoringIdentityType = "web" | "channel" | "unknown";
+
+export interface MonitoringIdentity {
+  identity_type: MonitoringIdentityType;
+  identity_source: string;
+  identity_display: string;
+  raw_identity: Record<string, string | null>;
+}
+
+export interface MonitoringConversationItem {
+  identity: MonitoringIdentity;
+  thread_id: string;
+  latest_run_id: string | null;
+  run_id?: string | null;
+  agent_name: string | null;
+  last_message: string | null;
+  status: string | null;
+  error_summary: string | null;
+  updated_at: string | null;
+  updated_at_bj: string | null;
+}
+
+export interface MonitoringRunItem {
+  run_id: string;
+  thread_id: string;
+  agent_name: string | null;
+  status: string;
+  model_name: string | null;
+  message_count: number;
+  first_human_message: string | null;
+  last_ai_message: string | null;
+  total_tokens: number;
+  llm_call_count: number;
+  error: string | null;
+  created_at: string | null;
+  created_at_bj: string | null;
+  updated_at: string | null;
+  updated_at_bj: string | null;
+}
+
+export interface MonitoringTimelineEvent {
+  seq: number;
+  occurred_at: string | null;
+  occurred_at_bj: string | null;
+  kind: string;
+  title: string;
+  status: string | null;
+  duration_ms: number | null;
+  source: "run_event" | "tool_audit";
+  tool_name?: string | null;
+  mcp_server_name?: string | null;
+  content: unknown;
+  metadata: Record<string, unknown>;
+}
+
+export interface MonitoringConversationsPage {
+  items: MonitoringConversationItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface MonitoringConversationDetail {
+  identity: MonitoringIdentity;
+  thread_id: string;
+  runs: MonitoringRunItem[];
+  message_preview: FeedbackConversationMessage[];
+}
+
+export interface MonitoringRunTimeline {
+  run: Partial<MonitoringRunItem> & { run_id: string; thread_id: string };
+  identity: MonitoringIdentity;
+  events: MonitoringTimelineEvent[];
+}
