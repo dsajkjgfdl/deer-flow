@@ -164,6 +164,150 @@ class FakeChannelStore:
         ]
 
 
+class FakeMultiChannelStore:
+    async def list_entries(self) -> list[dict]:
+        return [
+            {
+                "channel_name": "feishu",
+                "chat_id": "oc_xxx",
+                "topic_id": "msg_xxx",
+                "thread_id": "thread-im",
+                "user_id": "ou_xxx",
+                "created_at": 1780897160.0,
+                "updated_at": 1780897162.0,
+            },
+            {
+                "channel_name": "slack",
+                "chat_id": "C_xxx",
+                "thread_id": "thread-slack",
+                "user_id": "U_xxx",
+                "created_at": 1780897160.0,
+                "updated_at": 1780897162.0,
+            },
+        ]
+
+
+def _monitoring_conversation_row(
+    thread_id: str,
+    *,
+    run_id: str | None = None,
+    user_id: str = "user-web",
+    agent_name: str = "hr-boss-agent",
+    status: str = "success",
+    updated_at: str = "2026-06-08T05:39:22+00:00",
+) -> dict:
+    return {
+        "thread_id": thread_id,
+        "run_id": run_id or f"run-{thread_id}",
+        "user_id": user_id,
+        "agent_name": agent_name,
+        "status": status,
+        "updated_at": updated_at,
+        "message_count": 1,
+        "first_human_message": f"message {thread_id}",
+        "error": "timeout" if status == "error" else None,
+    }
+
+
+class FakePushdownMonitoringRepo(FakeMonitoringRepo):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows = [
+            _monitoring_conversation_row(f"thread-web-{idx:03d}", agent_name="other-agent", status="success")
+            for idx in range(240)
+        ]
+        self.rows.append(
+            _monitoring_conversation_row(
+                "thread-im",
+                run_id="run-im",
+                user_id="internal",
+                agent_name="hr-boss-agent",
+                status="error",
+            )
+        )
+        self.rows.append(
+            _monitoring_conversation_row(
+                "thread-slack",
+                run_id="run-slack",
+                user_id="internal",
+                agent_name="hr-boss-agent",
+                status="error",
+            )
+        )
+
+    async def list_recent_monitoring_conversations(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        q: str | None = None,
+        agent_name: str | None = None,
+        status: str | None = None,
+        source_thread_ids: list[str] | None = None,
+    ) -> dict:
+        call = {
+            "limit": limit,
+            "offset": offset,
+            "q": q,
+            "agent_name": agent_name,
+            "status": status,
+            "source_thread_ids": source_thread_ids,
+        }
+        self.recent_calls.append(call)
+        rows = list(self.rows)
+        if agent_name:
+            rows = [row for row in rows if row["agent_name"] == agent_name]
+        if status:
+            rows = [row for row in rows if row["status"] == status]
+        if source_thread_ids is not None:
+            allowed = set(source_thread_ids)
+            rows = [row for row in rows if row["thread_id"] in allowed]
+        return {
+            "items": rows[offset : offset + limit],
+            "total": len(rows),
+            "limit": limit,
+            "offset": offset,
+        }
+
+
+class FakeWebPagingMonitoringRepo(FakeMonitoringRepo):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows = [_monitoring_conversation_row("thread-im", user_id="internal")]
+        self.rows.extend(_monitoring_conversation_row(f"thread-web-{idx:03d}") for idx in range(205))
+
+    async def list_recent_monitoring_conversations(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        q: str | None = None,
+        agent_name: str | None = None,
+        status: str | None = None,
+        source_thread_ids: list[str] | None = None,
+    ) -> dict:
+        self.recent_calls.append(
+            {
+                "limit": limit,
+                "offset": offset,
+                "q": q,
+                "agent_name": agent_name,
+                "status": status,
+                "source_thread_ids": source_thread_ids,
+            }
+        )
+        rows = list(self.rows)
+        if source_thread_ids is not None:
+            allowed = set(source_thread_ids)
+            rows = [row for row in rows if row["thread_id"] in allowed]
+        return {
+            "items": rows[offset : offset + limit],
+            "total": len(rows),
+            "limit": limit,
+            "offset": offset,
+        }
+
+
 class FakeFeedbackRepo:
     async def summarize_for_admin(self) -> dict:
         return {
@@ -260,6 +404,25 @@ class FakeTimelineRunEventStore(FakeRunEventStore):
                 "metadata": {"caller": "lead_agent"},
                 "seq": 1,
                 "created_at": "2026-06-08T05:39:20+00:00",
+            }
+        ]
+
+
+class FakeSameTimestampMonitoringRepo(FakeMonitoringRepo):
+    async def list_tool_audits_for_run(self, run_id: str) -> list[dict]:
+        if run_id != "run-im":
+            return []
+        return [
+            {
+                "run_id": "run-im",
+                "thread_id": "thread-im",
+                "tool_name": "text2cypher_answer_question",
+                "mcp_server_name": "text2cypher",
+                "status": "error",
+                "latency_ms": 842,
+                "error": "timeout",
+                "created_at": "2026-06-08T05:39:20+00:00",
+                "metadata_json": {"argument_keys": ["question"]},
             }
         ]
 
@@ -522,6 +685,72 @@ def test_admin_monitoring_recent_conversations_includes_im_raw_identity():
     assert item["updated_at_bj"] == "2026-06-08 13:39:22"
 
 
+def test_admin_monitoring_recent_conversations_pushes_agent_status_to_repo():
+    from app.gateway.routers import platform_admin
+
+    repo = FakePushdownMonitoringRepo()
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = repo
+    app.state.channel_store = FakeMultiChannelStore()
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/platform/admin/monitoring/conversations/recent"
+            "?agent_name=hr-boss-agent&status=error&limit=10"
+        )
+
+    assert response.status_code == 200
+    assert repo.recent_calls[-1]["agent_name"] == "hr-boss-agent"
+    assert repo.recent_calls[-1]["status"] == "error"
+    assert {item["thread_id"] for item in response.json()["items"]} == {
+        "thread-im",
+        "thread-slack",
+    }
+
+
+def test_admin_monitoring_recent_conversations_pushes_channel_source_thread_ids():
+    from app.gateway.routers import platform_admin
+
+    repo = FakePushdownMonitoringRepo()
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = repo
+    app.state.channel_store = FakeMultiChannelStore()
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        response = client.get("/api/platform/admin/monitoring/conversations/recent?source=feishu&limit=1")
+
+    assert response.status_code == 200
+    assert repo.recent_calls[-1]["source_thread_ids"] == ["thread-im"]
+    data = response.json()
+    assert data["total"] == 1
+    assert [item["thread_id"] for item in data["items"]] == ["thread-im"]
+
+
+def test_admin_monitoring_recent_conversations_web_source_scans_pages():
+    from app.gateway.routers import platform_admin
+
+    repo = FakeWebPagingMonitoringRepo()
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = repo
+    app.state.channel_store = FakeChannelStore()
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        response = client.get("/api/platform/admin/monitoring/conversations/recent?source=web&limit=2&offset=203")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 205
+    assert data["offset"] == 203
+    assert [item["thread_id"] for item in data["items"]] == [
+        "thread-web-203",
+        "thread-web-204",
+    ]
+    assert [call["offset"] for call in repo.recent_calls] == [0, 200]
+
+
 def test_admin_monitoring_conversation_detail_returns_runs_and_identity():
     from app.gateway.routers import platform_admin
 
@@ -562,6 +791,40 @@ def test_admin_monitoring_run_timeline_merges_events_and_tool_audit():
     assert data["events"][1]["tool_name"] == "text2cypher_answer_question"
     assert data["events"][1]["occurred_at_bj"] == "2026-06-08 13:39:24"
     assert event_store.calls[-1]["user_id"] is None
+
+
+def test_admin_monitoring_run_timeline_limit_applies_after_merge():
+    from app.gateway.routers import platform_admin
+
+    event_store = FakeTimelineRunEventStore()
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = FakeMonitoringRepo()
+    app.state.channel_store = FakeChannelStore()
+    app.state.run_event_store = event_store
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        response = client.get("/api/platform/admin/monitoring/runs/run-im/timeline?limit=1")
+
+    assert response.status_code == 200
+    assert [event["kind"] for event in response.json()["events"]] == ["run.start"]
+
+
+def test_admin_monitoring_run_timeline_sorts_missing_seq_after_same_time_run_event():
+    from app.gateway.routers import platform_admin
+
+    event_store = FakeTimelineRunEventStore()
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = FakeSameTimestampMonitoringRepo()
+    app.state.channel_store = FakeChannelStore()
+    app.state.run_event_store = event_store
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        response = client.get("/api/platform/admin/monitoring/runs/run-im/timeline")
+
+    assert response.status_code == 200
+    assert [event["kind"] for event in response.json()["events"]] == ["run.start", "tool.error"]
 
 
 def test_admin_monitoring_run_messages_returns_admin_messages():

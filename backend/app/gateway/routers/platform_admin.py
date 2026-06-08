@@ -115,6 +115,8 @@ class FeedbackConversationResponse(BaseModel):
 
 
 _BJ_TZ = ZoneInfo("Asia/Shanghai")
+_RECENT_SCAN_CHUNK_SIZE = 200
+_MISSING_SEQ_SORT_VALUE = 1_000_000
 
 
 def _platform_repo(request: Request):
@@ -399,6 +401,24 @@ def _source_matches(
     return entry is not None and str(entry.get("channel_name") or "").lower() == source_key
 
 
+def _source_thread_ids_for_filter(
+    source: str | None,
+    channel_entries: dict[str, dict[str, Any]],
+) -> list[str] | None:
+    if not source:
+        return None
+    source_key = source.strip().lower()
+    if not source_key or source_key == "web":
+        return None
+    if source_key in {"im", "channel"}:
+        return sorted(channel_entries)
+    return sorted(
+        thread_id
+        for thread_id, entry in channel_entries.items()
+        if str(entry.get("channel_name") or "").lower() == source_key
+    )
+
+
 def _conversation_matches_filters(
     row: dict[str, Any],
     *,
@@ -417,11 +437,30 @@ def _conversation_matches_filters(
     return True
 
 
-def _repo_recent_kwargs(repo: Any, *, limit: int, offset: int, q: str | None) -> dict[str, Any]:
+def _repo_recent_kwargs(
+    repo: Any,
+    *,
+    limit: int,
+    offset: int,
+    q: str | None,
+    agent_name: str | None = None,
+    status: str | None = None,
+    source_thread_ids: list[str] | None = None,
+) -> dict[str, Any]:
     params = signature(repo.list_recent_monitoring_conversations).parameters
     supports_kwargs = any(param.kind == param.VAR_KEYWORD for param in params.values())
     kwargs: dict[str, Any] = {}
-    for key, value in {"limit": limit, "offset": offset, "q": q}.items():
+    values = {
+        "limit": limit,
+        "offset": offset,
+        "q": q,
+        "agent_name": agent_name,
+        "status": status,
+        "source_thread_ids": source_thread_ids,
+    }
+    for key, value in values.items():
+        if value is None and key in {"agent_name", "status", "source_thread_ids"}:
+            continue
         if supports_kwargs or key in params:
             kwargs[key] = value
     return kwargs
@@ -436,6 +475,99 @@ def _normalize_recent_result(result: Any) -> tuple[list[dict[str, Any]], int, in
         return items, total, limit, offset
     items = list(result or [])
     return items, len(items), len(items), 0
+
+
+async def _recent_conversations_page(
+    repo: Any,
+    *,
+    limit: int,
+    offset: int,
+    q: str | None,
+    agent_name: str | None,
+    status: str | None,
+    source_thread_ids: list[str] | None,
+) -> tuple[list[dict[str, Any]], int, int, int]:
+    result = await repo.list_recent_monitoring_conversations(
+        **_repo_recent_kwargs(
+            repo,
+            limit=limit,
+            offset=offset,
+            q=q,
+            agent_name=agent_name,
+            status=status,
+            source_thread_ids=source_thread_ids,
+        )
+    )
+    return _normalize_recent_result(result)
+
+
+def _needs_local_recent_filter(
+    repo_kwargs: dict[str, Any],
+    *,
+    source: str | None,
+    agent_name: str | None,
+    status: str | None,
+) -> bool:
+    source_key = source.strip().lower() if source else ""
+    if source_key == "web":
+        return True
+    if source_key and "source_thread_ids" not in repo_kwargs:
+        return True
+    if agent_name and "agent_name" not in repo_kwargs:
+        return True
+    if status and "status" not in repo_kwargs:
+        return True
+    return False
+
+
+async def _scan_recent_conversations(
+    repo: Any,
+    *,
+    q: str | None,
+    agent_name: str | None,
+    status: str | None,
+    source_thread_ids: list[str] | None,
+    source: str | None,
+    channel_entries: dict[str, dict[str, Any]],
+    limit: int,
+    offset: int,
+) -> tuple[list[dict[str, Any]], int]:
+    collected: list[dict[str, Any]] = []
+    matched_total = 0
+    repo_offset = 0
+    while True:
+        rows, repo_total, _repo_limit, _repo_offset = await _recent_conversations_page(
+            repo,
+            limit=_RECENT_SCAN_CHUNK_SIZE,
+            offset=repo_offset,
+            q=q,
+            agent_name=agent_name,
+            status=status,
+            source_thread_ids=source_thread_ids,
+        )
+        if not rows:
+            break
+
+        for row in rows:
+            if not _conversation_matches_filters(
+                row,
+                source=source,
+                agent_name=agent_name,
+                status=status,
+                channel_entries=channel_entries,
+            ):
+                continue
+            if matched_total >= offset and len(collected) < limit:
+                collected.append(row)
+            matched_total += 1
+
+        repo_offset += _RECENT_SCAN_CHUNK_SIZE
+        if len(rows) < _RECENT_SCAN_CHUNK_SIZE:
+            break
+        if repo_total and repo_offset >= repo_total:
+            break
+
+    return collected, matched_total
 
 
 async def _list_run_events_for_admin(
@@ -495,7 +627,7 @@ def _timeline_tool_audit(audit: dict[str, Any]) -> dict[str, Any]:
 def _timeline_sort_key(event: dict[str, Any]) -> tuple[datetime, int]:
     occurred_at = _datetime_from_value(event.get("occurred_at")) or datetime.max.replace(tzinfo=UTC)
     seq = event.get("seq")
-    return occurred_at, seq if isinstance(seq, int) else 0
+    return occurred_at, seq if isinstance(seq, int) else _MISSING_SEQ_SORT_VALUE
 
 
 def _merge_timeline_events(
@@ -587,28 +719,43 @@ async def recent_monitoring_conversations(
 ) -> MonitoringConversationsResponse:
     repo = _platform_repo(request)
     channel_entries = await _channel_entries_by_thread(request)
-    local_filtering = bool(source or agent_name or status)
-    fetch_limit = 200 if local_filtering else limit
-    fetch_offset = 0 if local_filtering else offset
-    result = await repo.list_recent_monitoring_conversations(
-        **_repo_recent_kwargs(repo, limit=fetch_limit, offset=fetch_offset, q=q)
+    source_thread_ids = _source_thread_ids_for_filter(source, channel_entries)
+    repo_kwargs = _repo_recent_kwargs(
+        repo,
+        limit=limit,
+        offset=offset,
+        q=q,
+        agent_name=agent_name,
+        status=status,
+        source_thread_ids=source_thread_ids,
     )
-    rows, total, _repo_limit, _repo_offset = _normalize_recent_result(result)
-
-    if local_filtering:
-        rows = [
-            row
-            for row in rows
-            if _conversation_matches_filters(
-                row,
-                source=source,
-                agent_name=agent_name,
-                status=status,
-                channel_entries=channel_entries,
-            )
-        ]
-        total = len(rows)
-        rows = rows[offset : offset + limit]
+    if _needs_local_recent_filter(
+        repo_kwargs,
+        source=source,
+        agent_name=agent_name,
+        status=status,
+    ):
+        rows, total = await _scan_recent_conversations(
+            repo,
+            q=q,
+            agent_name=agent_name,
+            status=status,
+            source_thread_ids=source_thread_ids,
+            source=source,
+            channel_entries=channel_entries,
+            limit=limit,
+            offset=offset,
+        )
+    else:
+        rows, total, _repo_limit, _repo_offset = await _recent_conversations_page(
+            repo,
+            limit=limit,
+            offset=offset,
+            q=q,
+            agent_name=agent_name,
+            status=status,
+            source_thread_ids=source_thread_ids,
+        )
 
     return MonitoringConversationsResponse(
         items=[_conversation_item_from_row(row, channel_entries) for row in rows],
@@ -660,7 +807,7 @@ async def monitoring_run_timeline(
     return MonitoringTimelineResponse(
         run=normalized_run,
         identity=_identity_for_thread(thread_id, run.get("user_id"), channel_entries),
-        events=_merge_timeline_events(run_events, tool_audits),
+        events=_merge_timeline_events(run_events, tool_audits)[:limit],
     )
 
 
