@@ -142,12 +142,15 @@ async def test_monitoring_recent_conversations_returns_latest_run_per_thread(tmp
 
         repo = PlatformRepository(sf)
         page = await repo.list_recent_monitoring_conversations(limit=50, offset=0)
+        blank_query_page = await repo.list_recent_monitoring_conversations(limit=50, offset=0, q="   ")
 
         assert page["total"] == 2
         assert [item["thread_id"] for item in page["items"]] == ["thread-2", "thread-1"]
         assert page["items"][1]["latest_run_id"] == "run-new"
         assert page["items"][1]["last_message"] == "latest question"
         assert page["items"][1]["error_summary"] == "backend unavailable"
+        assert blank_query_page["total"] == page["total"]
+        assert [item["thread_id"] for item in blank_query_page["items"]] == ["thread-2", "thread-1"]
     finally:
         await engine.dispose()
 
@@ -156,40 +159,79 @@ async def test_monitoring_recent_conversations_returns_latest_run_per_thread(tmp
 async def test_monitoring_run_detail_and_tool_audit_lookup(tmp_path):
     from datetime import UTC, datetime
 
+    from deerflow.persistence.platform.model import ToolAuditLogRow
     from deerflow.persistence.platform.sql import PlatformRepository
     from deerflow.persistence.run.model import RunRow
 
     engine, sf = await _session_factory(tmp_path)
     try:
         async with sf() as session:
-            session.add(
-                RunRow(
-                    run_id="run-1",
-                    thread_id="thread-1",
-                    assistant_id="hr-boss-agent",
-                    user_id="user-1",
-                    status="running",
-                    first_human_message="How many people?",
-                    message_count=1,
-                    created_at=datetime(2026, 6, 8, 5, 0, tzinfo=UTC),
-                    updated_at=datetime(2026, 6, 8, 5, 1, tzinfo=UTC),
-                )
+            audit_time = datetime(2026, 6, 8, 5, 2, tzinfo=UTC)
+            session.add_all(
+                [
+                    RunRow(
+                        run_id="run-1",
+                        thread_id="thread-1",
+                        assistant_id="hr-boss-agent",
+                        user_id="user-1",
+                        status="running",
+                        first_human_message="How many people?",
+                        message_count=1,
+                        created_at=datetime(2026, 6, 8, 5, 0, tzinfo=UTC),
+                        updated_at=datetime(2026, 6, 8, 5, 1, tzinfo=UTC),
+                    ),
+                    RunRow(
+                        run_id="run-other-thread",
+                        thread_id="thread-2",
+                        assistant_id="hr-boss-agent",
+                        user_id="user-2",
+                        status="success",
+                        first_human_message="Other thread",
+                        message_count=1,
+                        created_at=datetime(2026, 6, 8, 6, 0, tzinfo=UTC),
+                        updated_at=datetime(2026, 6, 8, 6, 1, tzinfo=UTC),
+                    ),
+                    ToolAuditLogRow(
+                        run_id="run-1",
+                        thread_id="thread-1",
+                        user_id="user-1",
+                        agent_name="hr-boss-agent",
+                        tool_name="text2cypher_prepare_schema",
+                        mcp_server_name="text2cypher",
+                        status="success",
+                        latency_ms=100,
+                        metadata_json={"argument_keys": ["schema"]},
+                        created_at=audit_time,
+                    ),
+                    ToolAuditLogRow(
+                        run_id="run-1",
+                        thread_id="thread-1",
+                        user_id="user-1",
+                        agent_name="hr-boss-agent",
+                        tool_name="text2cypher_answer_question",
+                        mcp_server_name="text2cypher",
+                        status="error",
+                        latency_ms=842,
+                        error="timeout",
+                        metadata_json={"argument_keys": ["question"]},
+                        created_at=audit_time,
+                    ),
+                    ToolAuditLogRow(
+                        run_id="run-other",
+                        thread_id="thread-1",
+                        user_id="user-1",
+                        agent_name="hr-boss-agent",
+                        tool_name="other_run_tool",
+                        mcp_server_name="text2cypher",
+                        status="success",
+                        latency_ms=10,
+                        created_at=datetime(2026, 6, 8, 4, 0, tzinfo=UTC),
+                    ),
+                ]
             )
             await session.commit()
 
         repo = PlatformRepository(sf)
-        await repo.write_tool_audit(
-            run_id="run-1",
-            thread_id="thread-1",
-            user_id="user-1",
-            agent_name="hr-boss-agent",
-            tool_name="text2cypher_answer_question",
-            mcp_server_name="text2cypher",
-            status="error",
-            latency_ms=842,
-            error="timeout",
-            metadata={"argument_keys": ["question"]},
-        )
 
         run = await repo.get_run_for_admin("run-1")
         runs = await repo.list_runs_for_thread("thread-1")
@@ -197,8 +239,11 @@ async def test_monitoring_run_detail_and_tool_audit_lookup(tmp_path):
 
         assert run is not None
         assert run["run_id"] == "run-1"
-        assert runs[0]["run_id"] == "run-1"
-        assert audits[0]["tool_name"] == "text2cypher_answer_question"
-        assert audits[0]["metadata_json"] == {"argument_keys": ["question"]}
+        assert [item["run_id"] for item in runs] == ["run-1"]
+        assert [item["tool_name"] for item in audits] == [
+            "text2cypher_prepare_schema",
+            "text2cypher_answer_question",
+        ]
+        assert audits[1]["metadata_json"] == {"argument_keys": ["question"]}
     finally:
         await engine.dispose()

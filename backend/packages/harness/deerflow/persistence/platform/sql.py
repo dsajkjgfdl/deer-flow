@@ -255,9 +255,10 @@ class PlatformRepository:
     async def list_recent_monitoring_conversations(self, *, limit: int = 50, offset: int = 0, q: str | None = None) -> dict[str, Any]:
         safe_limit = max(0, min(limit, 200))
         safe_offset = max(0, offset)
+        q = q.strip() if q is not None else ""
         filters = []
         if q:
-            pattern = f"%{q.strip()}%"
+            pattern = f"%{q}%"
             filters.append(
                 or_(
                     RunRow.run_id.ilike(pattern),
