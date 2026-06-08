@@ -168,10 +168,14 @@ export interface MonitoringConversationItem {
   thread_id: string;
   latest_run_id: string | null;
   run_id?: string | null;
+  user_id?: string | null;
   agent_name: string | null;
   last_message: string | null;
+  message_count?: number | null;
+  message_preview?: string | null;
   status: string | null;
   error_summary: string | null;
+  error?: string | null;
   updated_at: string | null;
   updated_at_bj: string | null;
 }
@@ -199,10 +203,13 @@ export interface MonitoringTimelineEvent {
   occurred_at: string | null;
   occurred_at_bj: string | null;
   kind: string;
-  title: string;
-  status: string | null;
-  duration_ms: number | null;
+  title?: string | null;
+  status?: string | null;
+  duration_ms?: number | null;
   source: "run_event" | "tool_audit";
+  thread_id?: string | null;
+  run_id?: string | null;
+  category?: string | null;
   tool_name?: string | null;
   mcp_server_name?: string | null;
   content: unknown;
@@ -220,7 +227,7 @@ export interface MonitoringConversationDetail {
   identity: MonitoringIdentity;
   thread_id: string;
   runs: MonitoringRunItem[];
-  message_preview: FeedbackConversationMessage[];
+  message_preview: string | null;
 }
 
 export interface MonitoringRunTimeline {

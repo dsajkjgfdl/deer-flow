@@ -8,6 +8,7 @@ import type {
   FeedbackConversation,
   FeedbackRecord,
   FeedbackSummary,
+  MonitoringConversationItem,
   MonitoringConversationDetail,
   MonitoringConversationsPage,
   MonitoringRunTimeline,
@@ -32,6 +33,17 @@ async function readJsonOrThrow<T>(res: Response, fallback: string): Promise<T> {
   if (res.ok) return res.json() as Promise<T>;
   const err = (await res.json().catch(() => ({}))) as { detail?: string };
   throw new Error(err.detail ?? fallback);
+}
+
+function normalizeMonitoringConversationItem(
+  item: MonitoringConversationItem,
+): MonitoringConversationItem {
+  return {
+    ...item,
+    latest_run_id: item.latest_run_id ?? item.run_id ?? null,
+    last_message: item.last_message ?? item.message_preview ?? null,
+    error_summary: item.error_summary ?? item.error ?? null,
+  };
 }
 
 export async function listAgentCatalog(): Promise<AgentCatalogEntry[]> {
@@ -167,10 +179,14 @@ export async function fetchRecentMonitoringConversations(
   const res = await fetch(
     `${getBackendBaseURL()}/api/platform/admin/monitoring/conversations/recent?${params.toString()}`,
   );
-  return readJsonOrThrow<MonitoringConversationsPage>(
+  const page = await readJsonOrThrow<MonitoringConversationsPage>(
     res,
     `Failed to load monitoring conversations: ${res.statusText}`,
   );
+  return {
+    ...page,
+    items: page.items.map(normalizeMonitoringConversationItem),
+  };
 }
 
 export async function fetchMonitoringConversation(

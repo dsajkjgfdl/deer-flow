@@ -1,5 +1,7 @@
 import { beforeEach, expect, test, vi } from "vitest";
 
+import type { MonitoringRunTimeline } from "@/core/platform/types";
+
 const fetchWithAuth = vi.fn();
 
 vi.mock("@/core/api/fetcher", () => ({
@@ -217,6 +219,102 @@ test("fetchRecentMonitoringConversations requests the default recent conversatio
     expect.stringContaining(
       "/api/platform/admin/monitoring/conversations/recent?limit=50&offset=0",
     ),
+  );
+});
+
+test("fetchRecentMonitoringConversations normalizes actual backend conversation fields", async () => {
+  fetchWithAuth.mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      items: [
+        {
+          identity: {
+            identity_type: "channel",
+            identity_source: "feishu",
+            identity_display: "feishu: ou_backend",
+            raw_identity: { channel_user_id: "ou_backend" },
+          },
+          thread_id: "thread-backend",
+          run_id: "run-backend",
+          user_id: "user-backend",
+          agent_name: "hr-boss-agent",
+          message_count: 3,
+          message_preview: "后端实际预览",
+          status: "error",
+          error: "tool timeout",
+          updated_at: "2026-06-08T05:39:22+00:00",
+          updated_at_bj: "2026-06-08 13:39:22",
+        },
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    }),
+  });
+
+  const { fetchRecentMonitoringConversations } =
+    await import("@/core/platform/api");
+
+  await expect(fetchRecentMonitoringConversations()).resolves.toMatchObject({
+    items: [
+      {
+        thread_id: "thread-backend",
+        run_id: "run-backend",
+        user_id: "user-backend",
+        message_count: 3,
+        message_preview: "后端实际预览",
+        error: "tool timeout",
+        latest_run_id: "run-backend",
+        last_message: "后端实际预览",
+        error_summary: "tool timeout",
+      },
+    ],
+  });
+});
+
+test("fetchMonitoringRunTimeline accepts sparse run_event timeline items", async () => {
+  const sparseTimeline = {
+    run: { run_id: "run-sparse", thread_id: "thread-sparse" },
+    identity: {
+      identity_type: "unknown",
+      identity_source: "imported",
+      identity_display: "unknown/imported",
+      raw_identity: {},
+    },
+    events: [
+      {
+        seq: 1,
+        occurred_at: "2026-06-08T05:39:24+00:00",
+        occurred_at_bj: "2026-06-08 13:39:24",
+        kind: "message",
+        source: "run_event",
+        thread_id: "thread-sparse",
+        run_id: "run-sparse",
+        category: "message",
+        content: { text: "hi" },
+        metadata: {},
+      },
+    ],
+  } satisfies MonitoringRunTimeline;
+
+  fetchWithAuth.mockResolvedValue({
+    ok: true,
+    json: async () => sparseTimeline,
+  });
+
+  const { fetchMonitoringRunTimeline } = await import("@/core/platform/api");
+
+  await expect(fetchMonitoringRunTimeline("run-sparse")).resolves.toMatchObject(
+    {
+      events: [
+        {
+          kind: "message",
+          thread_id: "thread-sparse",
+          run_id: "run-sparse",
+          category: "message",
+        },
+      ],
+    },
   );
 });
 
