@@ -1,6 +1,9 @@
 import { beforeEach, expect, test, vi } from "vitest";
 
-import type { MonitoringRunTimeline } from "@/core/platform/types";
+import type {
+  MonitoringConversationsPage,
+  MonitoringRunTimeline,
+} from "@/core/platform/types";
 
 const fetchWithAuth = vi.fn();
 
@@ -223,33 +226,35 @@ test("fetchRecentMonitoringConversations requests the default recent conversatio
 });
 
 test("fetchRecentMonitoringConversations normalizes actual backend conversation fields", async () => {
+  const rawBackendPage = {
+    items: [
+      {
+        identity: {
+          identity_type: "unknown",
+          identity_source: null,
+          identity_display: null,
+          raw_identity: { channel_user_id: null },
+        },
+        thread_id: "thread-backend",
+        run_id: "run-backend",
+        user_id: "user-backend",
+        agent_name: "hr-boss-agent",
+        message_count: 3,
+        message_preview: "后端实际预览",
+        status: "error",
+        error: "tool timeout",
+        updated_at: "2026-06-08T05:39:22+00:00",
+        updated_at_bj: "2026-06-08 13:39:22",
+      },
+    ],
+    total: 1,
+    limit: 50,
+    offset: 0,
+  } satisfies MonitoringConversationsPage;
+
   fetchWithAuth.mockResolvedValue({
     ok: true,
-    json: async () => ({
-      items: [
-        {
-          identity: {
-            identity_type: "channel",
-            identity_source: "feishu",
-            identity_display: "feishu: ou_backend",
-            raw_identity: { channel_user_id: "ou_backend" },
-          },
-          thread_id: "thread-backend",
-          run_id: "run-backend",
-          user_id: "user-backend",
-          agent_name: "hr-boss-agent",
-          message_count: 3,
-          message_preview: "后端实际预览",
-          status: "error",
-          error: "tool timeout",
-          updated_at: "2026-06-08T05:39:22+00:00",
-          updated_at_bj: "2026-06-08 13:39:22",
-        },
-      ],
-      total: 1,
-      limit: 50,
-      offset: 0,
-    }),
+    json: async () => rawBackendPage,
   });
 
   const { fetchRecentMonitoringConversations } =

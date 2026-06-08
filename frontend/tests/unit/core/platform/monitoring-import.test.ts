@@ -2,7 +2,10 @@ import { expect, test } from "vitest";
 
 import { parseImportedRunTimeline } from "@/core/platform/monitoring-import";
 
-import type { MonitoringConversationDetail } from "@/core/platform/types";
+import type {
+  MonitoringConversationDetail,
+  MonitoringRunTimeline,
+} from "@/core/platform/types";
 
 test("parseImportedRunTimeline accepts one valid timeline JSON string", () => {
   const parsed = parseImportedRunTimeline(
@@ -46,6 +49,59 @@ test("parseImportedRunTimeline accepts sparse run_event timeline JSON", () => {
       category: "message",
     });
   }
+});
+
+test("parseImportedRunTimeline accepts imported events with missing or null seq", () => {
+  const timelineWithMissingSeq = {
+    run: { run_id: "run-missing-seq", thread_id: "thread-1" },
+    identity: {
+      identity_type: "unknown",
+      identity_source: "imported",
+      identity_display: "unknown/imported",
+      raw_identity: {},
+    },
+    events: [
+      {
+        occurred_at: null,
+        occurred_at_bj: null,
+        kind: "tool.audit",
+        source: "tool_audit",
+        content: null,
+        metadata: {},
+      },
+    ],
+  } satisfies MonitoringRunTimeline;
+
+  const timelineWithNullSeq = {
+    run: { run_id: "run-null-seq", thread_id: "thread-1" },
+    identity: {
+      identity_type: "unknown",
+      identity_source: "imported",
+      identity_display: "unknown/imported",
+      raw_identity: {},
+    },
+    events: [
+      {
+        seq: null,
+        occurred_at: null,
+        occurred_at_bj: null,
+        kind: "tool.audit",
+        source: "tool_audit",
+        content: null,
+        metadata: {},
+      },
+    ],
+  } satisfies MonitoringRunTimeline;
+
+  const missingSeqParsed = parseImportedRunTimeline(
+    JSON.stringify(timelineWithMissingSeq),
+  );
+  const nullSeqParsed = parseImportedRunTimeline(
+    JSON.stringify(timelineWithNullSeq),
+  );
+
+  expect(missingSeqParsed.ok).toBe(true);
+  expect(nullSeqParsed.ok).toBe(true);
 });
 
 test("MonitoringConversationDetail uses backend string message preview", () => {
