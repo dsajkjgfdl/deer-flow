@@ -65,6 +65,8 @@ IM 用户身份只展示渠道原始字段。例如飞书展示 `open_id/chat_id
 
 ## 页面信息架构
 
+管理监控页使用独立前端路径 `/admin/monitoring`，不挂在普通 workspace 信息架构下。页面仍复用现有管理员鉴权能力，只有管理员可见。
+
 页面采用三段下钻：
 
 ```text
@@ -76,7 +78,7 @@ IM 用户身份只展示渠道原始字段。例如飞书展示 `open_id/chat_id
 
 ### 默认首页
 
-默认展示“所有用户最近对话”，按最近更新时间倒序。每条对话卡片展示：
+默认展示“所有用户最近 50 条对话”，不默认限制时间范围，按最近更新时间倒序。每条对话卡片展示：
 
 - 身份来源：`web`、`feishu`、`dingtalk`、`wecom`、`wechat`、`slack`、`telegram`、`discord`
 - 原始身份摘要
@@ -107,6 +109,8 @@ IM 用户身份只展示渠道原始字段。例如飞书展示 `open_id/chat_id
 - thread_id
 - run_id
 - 工具名
+
+顶部还提供“导入 run timeline JSON”入口，用于离线排障。导入后进入临时查看模式，复用同一套 run 时间线与动作 Inspector，不写入数据库。
 
 ### 对话详情
 
@@ -166,7 +170,7 @@ IM 用户身份只展示渠道原始字段。例如飞书展示 `open_id/chat_id
 
 查询参数：
 
-- `limit`: 默认 50，最大 200
+- `limit`: 默认 50，最大 200。默认请求只取最近 50 条，不默认附加时间范围。
 - `offset` 或 cursor
 - `source`
 - `agent_name`
@@ -273,6 +277,37 @@ IM 用户身份只展示渠道原始字段。例如飞书展示 `open_id/chat_id
 4. 归一化为统一 timeline event。
 5. 按 `occurred_at` 升序排序，同一时间按 `seq` 排序。
 
+### Run Timeline JSON 导入
+
+前端需要支持导入单个 run timeline JSON，用于把线上导出的单 run 排障包、IM channel 问题复盘包或其他环境中的 run 时间线放到本地管理后台查看。
+
+导入入口：
+
+- `/admin/monitoring` 顶部操作按钮。
+- run 时间线页右上角操作按钮。
+
+导入方式：
+
+- 上传 `.json` 文件。
+- 粘贴 JSON 文本。
+
+导入范围：
+
+- 只支持单个 run timeline JSON。
+- JSON schema 与 `GET /api/platform/admin/monitoring/runs/{run_id}/timeline` 响应保持一致。
+- 必须包含 `run.run_id`、`run.thread_id`、`events[]`。
+- `identity` 可为空；为空时展示为 `unknown/imported`。
+
+导入行为：
+
+- 默认只在前端内存中解析和展示，不写入数据库。
+- 导入后的页面进入 `imported` 临时状态，明确标识“导入视图”。
+- 时间线排序、北京时间展示、事件详情 Inspector 与真实 run 一致。
+- schema 不匹配时展示具体字段错误，不进入时间线。
+- 导入 JSON 中的敏感字段仍按 Inspector 脱敏规则展示。
+
+导入后的 URL 可使用本地状态或 session storage 保持刷新可见，但不要求生成可分享链接。若未来需要保存导入记录，应另行设计带审计的持久化接口。
+
 ### Run 消息
 
 `GET /api/platform/admin/monitoring/runs/{run_id}/messages`
@@ -312,13 +347,13 @@ IM 用户身份只展示渠道原始字段。例如飞书展示 `open_id/chat_id
 
 新增管理监控模块：
 
-- `frontend/src/app/workspace/admin/monitoring/page.tsx` 或未来独立 `/admin/monitoring`
+- `frontend/src/app/admin/monitoring/page.tsx`
 - `frontend/src/core/platform-admin/monitoring/api.ts`
 - `frontend/src/core/platform-admin/monitoring/types.ts`
 - `frontend/src/core/platform-admin/monitoring/hooks.ts`
-- `frontend/src/components/workspace/admin/monitoring/*`
+- `frontend/src/components/platform-admin/monitoring/*`
 
-如果当前“管理后台”尚未有独立前端路由，第一版可挂在 workspace 导航中，仅管理员可见。后续再抽成独立 admin layout。
+第一版即使用独立管理后台路径 `/admin/monitoring`。如果当前前端还没有独立 admin layout，可先新增最小 admin shell，但不要挂到普通 workspace 导航中。
 
 ## 测试计划
 
@@ -340,6 +375,8 @@ IM 用户身份只展示渠道原始字段。例如飞书展示 `open_id/chat_id
 - 点击对话加载 run 列表。
 - 点击 run 加载时间线。
 - 点击事件展示 Inspector。
+- 导入单个 run timeline JSON 后能进入临时查看模式。
+- 导入 JSON schema 错误时能展示字段级错误。
 - 空状态、错误状态、加载状态完整。
 
 ## 落地顺序
@@ -348,11 +385,6 @@ IM 用户身份只展示渠道原始字段。例如飞书展示 `open_id/chat_id
 2. 后端实现 run timeline 接口。
 3. 前端实现监控页基础三栏布局。
 4. 前端接入筛选、搜索、下钻。
-5. 补 tool start/error 等事件采集。
-6. 完成测试和权限校验。
-
-## 待确认事项
-
-1. 管理监控页最终挂载路径：`/workspace/admin/monitoring` 还是独立 `/admin/monitoring`。
-2. 最近对话默认时间范围：无限制最近 50 条，还是默认最近 24 小时。
-3. 是否需要导出单个 run timeline JSON。
+5. 前端实现单个 run timeline JSON 导入查看。
+6. 补 tool start/error 等事件采集。
+7. 完成测试和权限校验。
