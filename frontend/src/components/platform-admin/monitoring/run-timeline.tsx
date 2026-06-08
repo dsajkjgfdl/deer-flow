@@ -15,6 +15,7 @@ import {
   durationText,
   eventKey,
   eventTone,
+  identityText,
   shortId,
   statusVariant,
   timeText,
@@ -47,16 +48,25 @@ export function RunTimeline({
     <section className="min-h-0 border-b">
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
             <ActivityIcon className="text-muted-foreground size-4 shrink-0" />
             <div className="min-w-0">
               <h2 className="truncate text-sm font-semibold">Run timeline</h2>
               <div className="text-muted-foreground truncate font-mono text-xs">
                 {timeline ? shortId(timeline.run.run_id) : "-"}
               </div>
+              {timeline && (
+                <div className="text-muted-foreground truncate text-xs">
+                  {identityText(timeline.identity)}
+                </div>
+              )}
             </div>
           </div>
-          {isImported && <Badge variant="secondary">Imported</Badge>}
+          {isImported && (
+            <Badge className="shrink-0" variant="secondary">
+              Imported
+            </Badge>
+          )}
         </div>
 
         <div className="min-h-[280px] flex-1 overflow-y-auto px-3 py-3">
