@@ -209,11 +209,30 @@ class TestToolCallbacks:
         assert len(tool_events) == 1
         assert tool_events[0]["category"] == "trace"
         assert tool_events[0]["content"]["tool_name"] == "text2cypher_answer_question"
-        assert tool_events[0]["content"]["input"] == "question=研发部门有多少人？"
+        assert "input" not in tool_events[0]["content"]
         assert tool_events[0]["content"]["input_keys"] == ["question"]
         assert tool_events[0]["metadata"]["caller"] == "lead_agent"
         assert tool_events[0]["metadata"]["tool_call_id"] == str(run_id)
         assert tool_events[0]["metadata"]["mcp_server_name"] == "text2cypher"
+
+    @pytest.mark.anyio
+    async def test_on_tool_start_does_not_persist_sensitive_input_str(self, journal_setup):
+        j, store = journal_setup
+        j.on_tool_start(
+            {"name": "secure_lookup"},
+            "token=secret-token password=hunter2",
+            run_id=uuid4(),
+            tags=["lead_agent"],
+            inputs={"token": "secret-token", "password": "hunter2"},
+        )
+        await j.flush()
+        events = await store.list_events("t1", "r1")
+        tool_event = [e for e in events if e["event_type"] == "tool.start"][0]
+
+        assert "input" not in tool_event["content"]
+        assert "secret-token" not in str(tool_event["content"])
+        assert "hunter2" not in str(tool_event["content"])
+        assert tool_event["content"]["input_keys"] == ["password", "token"]
 
     @pytest.mark.anyio
     async def test_on_tool_start_metadata_cannot_override_system_fields(self, journal_setup):

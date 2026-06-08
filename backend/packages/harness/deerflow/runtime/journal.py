@@ -322,7 +322,6 @@ class RunJournal(BaseCallbackHandler):
             category="trace",
             content={
                 "tool_name": tool_name,
-                "input": input_str,
                 "input_keys": sorted(inputs.keys()) if isinstance(inputs, dict) else [],
             },
             metadata={**(metadata or {}), "caller": caller, "tool_call_id": tool_call_id},
