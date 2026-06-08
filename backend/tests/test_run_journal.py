@@ -192,6 +192,30 @@ class TestLifecycleCallbacks:
 
 class TestToolCallbacks:
     @pytest.mark.anyio
+    async def test_on_tool_start_emits_trace_event(self, journal_setup):
+        j, store = journal_setup
+        run_id = uuid4()
+        j.on_tool_start(
+            {"name": "text2cypher_answer_question"},
+            "question=研发部门有多少人？",
+            run_id=run_id,
+            tags=["lead_agent"],
+            metadata={"mcp_server_name": "text2cypher"},
+            inputs={"question": "研发部门有多少人？"},
+        )
+        await j.flush()
+        events = await store.list_events("t1", "r1")
+        tool_events = [e for e in events if e["event_type"] == "tool.start"]
+        assert len(tool_events) == 1
+        assert tool_events[0]["category"] == "trace"
+        assert tool_events[0]["content"]["tool_name"] == "text2cypher_answer_question"
+        assert tool_events[0]["content"]["input"] == "question=研发部门有多少人？"
+        assert tool_events[0]["content"]["input_keys"] == ["question"]
+        assert tool_events[0]["metadata"]["caller"] == "lead_agent"
+        assert tool_events[0]["metadata"]["tool_call_id"] == str(run_id)
+        assert tool_events[0]["metadata"]["mcp_server_name"] == "text2cypher"
+
+    @pytest.mark.anyio
     async def test_tool_end_with_tool_message(self, journal_setup):
         """on_tool_end with a ToolMessage stores it as llm.tool.result."""
         from langchain_core.messages import ToolMessage
@@ -222,14 +246,27 @@ class TestToolCallbacks:
         assert messages[0]["content"]["content"] == "file list"
 
     @pytest.mark.anyio
-    async def test_on_tool_error_no_crash(self, journal_setup):
-        """on_tool_error should not crash (no event emitted by default)."""
+    async def test_on_tool_error_emits_error_event(self, journal_setup):
         j, store = journal_setup
-        j.on_tool_error(TimeoutError("timeout"), run_id=uuid4(), name="web_fetch")
+        run_id = uuid4()
+        j.on_tool_error(
+            TimeoutError("timeout"),
+            run_id=run_id,
+            tags=["subagent:research"],
+            metadata={"mcp_server_name": "web"},
+            name="web_fetch",
+        )
         await j.flush()
-        # Base implementation does not emit tool_error — just verify no crash
         events = await store.list_events("t1", "r1")
-        assert isinstance(events, list)
+        tool_events = [e for e in events if e["event_type"] == "tool.error"]
+        assert len(tool_events) == 1
+        assert tool_events[0]["category"] == "error"
+        assert tool_events[0]["content"] == "timeout"
+        assert tool_events[0]["metadata"]["caller"] == "subagent:research"
+        assert tool_events[0]["metadata"]["tool_call_id"] == str(run_id)
+        assert tool_events[0]["metadata"]["error_type"] == "TimeoutError"
+        assert tool_events[0]["metadata"]["tool_name"] == "web_fetch"
+        assert tool_events[0]["metadata"]["mcp_server_name"] == "web"
 
 
 class TestCustomEvents:

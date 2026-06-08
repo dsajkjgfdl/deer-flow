@@ -314,7 +314,36 @@ class RunJournal(BaseCallbackHandler):
     def on_tool_start(self, serialized, input_str, *, run_id, parent_run_id=None, tags=None, metadata=None, inputs=None, **kwargs):
         """Handle tool start event, cache tool call ID for later correlation"""
         tool_call_id = str(run_id)
+        tool_name = (serialized or {}).get("name") or kwargs.get("name") or "unknown"
+        caller = self._identify_caller(tags)
         logger.debug("Tool start for node %s, tool_call_id=%s, tags=%s", run_id, tool_call_id, tags)
+        self._put(
+            event_type="tool.start",
+            category="trace",
+            content={
+                "tool_name": tool_name,
+                "input": input_str,
+                "input_keys": sorted(inputs.keys()) if isinstance(inputs, dict) else [],
+            },
+            metadata={"caller": caller, "tool_call_id": tool_call_id, **(metadata or {})},
+        )
+
+    def on_tool_error(self, error, *, run_id, parent_run_id=None, tags=None, metadata=None, name=None, **kwargs):
+        """Handle tool error event for timeline visibility."""
+        tool_call_id = str(run_id)
+        caller = self._identify_caller(tags)
+        self._put(
+            event_type="tool.error",
+            category="error",
+            content=str(error),
+            metadata={
+                "caller": caller,
+                "tool_call_id": tool_call_id,
+                "tool_name": name or kwargs.get("tool_name") or "unknown",
+                "error_type": type(error).__name__,
+                **(metadata or {}),
+            },
+        )
 
     def on_tool_end(self, output, *, run_id, parent_run_id=None, **kwargs):
         """Handle tool end event, append message and clear node data"""
