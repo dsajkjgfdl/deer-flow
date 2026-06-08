@@ -685,6 +685,26 @@ def test_admin_monitoring_recent_conversations_includes_im_raw_identity():
     assert item["updated_at_bj"] == "2026-06-08 13:39:22"
 
 
+def test_admin_monitoring_recent_conversations_searches_im_raw_identity():
+    from app.gateway.routers import platform_admin
+
+    repo = FakeMonitoringRepo()
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = repo
+    app.state.channel_store = FakeChannelStore()
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        for query in ["ou_xxx", "OC_XXX", "msg_xxx"]:
+            repo.recent_calls.clear()
+            response = client.get(f"/api/platform/admin/monitoring/conversations/recent?q={query}")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert [item["thread_id"] for item in data["items"]] == ["thread-im"]
+            assert repo.recent_calls[-1].get("q") is None
+
+
 def test_admin_monitoring_recent_conversations_pushes_agent_status_to_repo():
     from app.gateway.routers import platform_admin
 

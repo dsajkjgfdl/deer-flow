@@ -419,12 +419,62 @@ def _source_thread_ids_for_filter(
     )
 
 
+def _normalized_query(q: str | None) -> str | None:
+    if q is None:
+        return None
+    text = q.strip().lower()
+    return text or None
+
+
+def _scalar_text_values(data: dict[str, Any]) -> list[str]:
+    return [
+        str(value)
+        for value in data.values()
+        if isinstance(value, str | int | float | bool)
+    ]
+
+
+def _contains_query(values: list[Any], query: str | None) -> bool:
+    if query is None:
+        return True
+    return any(query in str(value).lower() for value in values if value is not None)
+
+
+def _conversation_matches_query(
+    row: dict[str, Any],
+    *,
+    query: str | None,
+    channel_entries: dict[str, dict[str, Any]],
+) -> bool:
+    if query is None:
+        return True
+
+    row_values = [
+        row.get("thread_id"),
+        row.get("run_id"),
+        row.get("latest_run_id"),
+        row.get("user_id"),
+        row.get("agent_name"),
+        row.get("status"),
+        row.get("last_message"),
+        row.get("message_preview"),
+        row.get("error"),
+        row.get("error_summary"),
+        _message_preview(row),
+        _error_summary(row),
+    ]
+    thread_id = str(row.get("thread_id") or "")
+    channel_values = _scalar_text_values(channel_entries.get(thread_id, {}))
+    return _contains_query(row_values + channel_values, query)
+
+
 def _conversation_matches_filters(
     row: dict[str, Any],
     *,
     source: str | None,
     agent_name: str | None,
     status: str | None,
+    q: str | None,
     channel_entries: dict[str, dict[str, Any]],
 ) -> bool:
     thread_id = str(row.get("thread_id") or "")
@@ -433,6 +483,8 @@ def _conversation_matches_filters(
     if agent_name and row.get("agent_name") != agent_name:
         return False
     if status and row.get("status") != status:
+        return False
+    if not _conversation_matches_query(row, query=_normalized_query(q), channel_entries=channel_entries):
         return False
     return True
 
@@ -507,7 +559,10 @@ def _needs_local_recent_filter(
     source: str | None,
     agent_name: str | None,
     status: str | None,
+    q: str | None,
 ) -> bool:
+    if _normalized_query(q):
+        return True
     source_key = source.strip().lower() if source else ""
     if source_key == "web":
         return True
@@ -540,7 +595,7 @@ async def _scan_recent_conversations(
             repo,
             limit=_RECENT_SCAN_CHUNK_SIZE,
             offset=repo_offset,
-            q=q,
+            q=None,
             agent_name=agent_name,
             status=status,
             source_thread_ids=source_thread_ids,
@@ -554,6 +609,7 @@ async def _scan_recent_conversations(
                 source=source,
                 agent_name=agent_name,
                 status=status,
+                q=q,
                 channel_entries=channel_entries,
             ):
                 continue
@@ -734,6 +790,7 @@ async def recent_monitoring_conversations(
         source=source,
         agent_name=agent_name,
         status=status,
+        q=q,
     ):
         rows, total = await _scan_recent_conversations(
             repo,
