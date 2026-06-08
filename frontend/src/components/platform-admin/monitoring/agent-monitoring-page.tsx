@@ -30,6 +30,7 @@ import {
 import { ConversationDetail } from "./conversation-detail";
 import { ConversationList } from "./conversation-list";
 import { EventInspector } from "./event-inspector";
+import { eventKey } from "./format";
 import { ImportRunDialog } from "./import-run-dialog";
 import { RunTimeline } from "./run-timeline";
 
@@ -60,31 +61,6 @@ function displayError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-function eventKey(event: MonitoringTimelineEvent, index: number): string {
-  if (typeof event.seq === "number") return `seq:${event.seq}`;
-  return `idx:${index}:${event.kind}:${event.occurred_at ?? ""}`;
-}
-
-function eventSelectionValue(
-  event: MonitoringTimelineEvent,
-  index: number,
-): number {
-  return event.seq ?? index;
-}
-
-function selectedSeqFromKey(
-  events: MonitoringTimelineEvent[],
-  selectedEventKey: string | null,
-): number | null {
-  if (!selectedEventKey) return null;
-  const index = events.findIndex(
-    (event, eventIndex) => eventKey(event, eventIndex) === selectedEventKey,
-  );
-  if (index < 0) return null;
-  const event = events[index];
-  return event ? eventSelectionValue(event, index) : null;
-}
-
 export function AgentMonitoringPage() {
   const queryClient = useQueryClient();
   const [filters, setFilters] = useState({
@@ -109,7 +85,6 @@ export function AgentMonitoringPage() {
   const liveTimeline = useMonitoringRunTimeline(liveRunId);
   const activeTimeline = importedTimeline ?? liveTimeline.timeline;
   const events = activeTimeline?.events ?? EMPTY_EVENTS;
-  const selectedSeq = selectedSeqFromKey(events, selectedEventKey);
   const selectedEvent = useMemo(() => {
     if (!selectedEventKey) return null;
     return (
@@ -120,6 +95,22 @@ export function AgentMonitoringPage() {
   }, [events, selectedEventKey]);
   const liveError =
     conversations.error ?? conversationDetail.error ?? liveTimeline.error;
+
+  function clearDrillDown() {
+    setImportedTimeline(null);
+    setSelectedThreadId(null);
+    setSelectedRunId(null);
+    setSelectedEventKey(null);
+  }
+
+  function updateFilters(patch: Partial<typeof filters>) {
+    clearDrillDown();
+    setFilters((current) => ({
+      ...current,
+      ...patch,
+      offset: 0,
+    }));
+  }
 
   useEffect(() => {
     if (importedTimeline || selectedThreadId || conversations.page.items.length === 0) {
@@ -184,19 +175,6 @@ export function AgentMonitoringPage() {
     );
   }
 
-  function handleSelectSeq(seq: number | null) {
-    if (seq == null) {
-      setSelectedEventKey(null);
-      return;
-    }
-
-    const index = events.findIndex(
-      (event, eventIndex) => eventSelectionValue(event, eventIndex) === seq,
-    );
-    const event = index >= 0 ? events[index] : undefined;
-    setSelectedEventKey(event ? eventKey(event, index) : null);
-  }
-
   function handleRefresh() {
     void queryClient.invalidateQueries({
       queryKey: ["platform", "admin", "monitoring"],
@@ -221,11 +199,9 @@ export function AgentMonitoringPage() {
               placeholder="Search"
               value={filters.q}
               onChange={(event) =>
-                setFilters((current) => ({
-                  ...current,
+                updateFilters({
                   q: event.target.value,
-                  offset: 0,
-                }))
+                })
               }
             />
           </div>
@@ -233,11 +209,9 @@ export function AgentMonitoringPage() {
           <Select
             value={filters.source || "all"}
             onValueChange={(value) =>
-              setFilters((current) => ({
-                ...current,
+              updateFilters({
                 source: value === "all" ? "" : value,
-                offset: 0,
-              }))
+              })
             }
           >
             <SelectTrigger className="w-[136px]">
@@ -255,11 +229,9 @@ export function AgentMonitoringPage() {
           <Select
             value={filters.status || "all"}
             onValueChange={(value) =>
-              setFilters((current) => ({
-                ...current,
+              updateFilters({
                 status: value === "all" ? "" : value,
-                offset: 0,
-              }))
+              })
             }
           >
             <SelectTrigger className="w-[136px]">
@@ -309,8 +281,8 @@ export function AgentMonitoringPage() {
         <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_minmax(220px,34vh)]">
           <RunTimeline
             timeline={activeTimeline}
-            selectedSeq={selectedSeq}
-            onSelectSeq={handleSelectSeq}
+            selectedEventKey={selectedEventKey}
+            onSelectEventKey={setSelectedEventKey}
             isLoading={importedTimeline ? false : liveTimeline.isLoading}
             isImported={Boolean(importedTimeline)}
           />

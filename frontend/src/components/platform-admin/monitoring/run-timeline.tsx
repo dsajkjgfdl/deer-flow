@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 
 import {
   durationText,
+  eventKey,
   eventTone,
   shortId,
   statusVariant,
@@ -21,14 +22,10 @@ import {
 
 interface RunTimelineProps {
   timeline: MonitoringRunTimeline | null;
-  selectedSeq: number | null;
-  onSelectSeq: (seq: number | null) => void;
+  selectedEventKey: string | null;
+  onSelectEventKey: (key: string) => void;
   isLoading: boolean;
   isImported: boolean;
-}
-
-function eventSelectionValue(seq: number | null | undefined, index: number) {
-  return seq ?? index;
 }
 
 function eventTitle(title: string | null | undefined, kind: string): string {
@@ -39,8 +36,8 @@ function eventTitle(title: string | null | undefined, kind: string): string {
 
 export function RunTimeline({
   timeline,
-  selectedSeq,
-  onSelectSeq,
+  selectedEventKey,
+  onSelectEventKey,
   isLoading,
   isImported,
 }: RunTimelineProps) {
@@ -74,8 +71,8 @@ export function RunTimeline({
           ) : (
             <div className="space-y-2">
               {events.map((event, index) => {
-                const selectionValue = eventSelectionValue(event.seq, index);
-                const isSelected = selectedSeq === selectionValue;
+                const rowKey = eventKey(event, index);
+                const isSelected = selectedEventKey === rowKey;
                 const title = eventTitle(event.title, event.kind);
                 const toolLabel =
                   event.tool_name || event.mcp_server_name
@@ -93,7 +90,7 @@ export function RunTimeline({
                       eventTone(event),
                       isSelected && "ring-2 ring-ring",
                     )}
-                    onClick={() => onSelectSeq(selectionValue)}
+                    onClick={() => onSelectEventKey(rowKey)}
                   >
                     <div className="mt-1 flex flex-col items-center">
                       <div className="bg-background flex size-6 items-center justify-center rounded-full border">

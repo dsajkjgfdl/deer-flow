@@ -70,6 +70,14 @@ export function durationText(value?: number | null): string {
   return `${(value / 60_000).toFixed(1)} min`;
 }
 
+export function eventKey(
+  event: MonitoringTimelineEvent,
+  index: number,
+): string {
+  if (event.seq != null) return `seq:${event.seq}`;
+  return `idx:${index}:${event.kind}:${event.occurred_at ?? ""}`;
+}
+
 export function eventTone(event: MonitoringTimelineEvent): string {
   const normalized = event.status?.toLowerCase() ?? "";
   if (
