@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from deerflow.persistence.platform.model import AdminAuditLogRow, AgentAssignmentRow, ToolAuditLogRow
@@ -17,6 +17,15 @@ class PlatformRepository:
     @staticmethod
     def _row_to_dict(row: Any) -> dict[str, Any]:
         return row.to_dict()
+
+    def _run_row_to_monitoring_dict(self, row: RunRow) -> dict[str, Any]:
+        data = self._row_to_dict(row)
+        metadata = row.metadata_json if isinstance(row.metadata_json, dict) else {}
+        data["agent_name"] = str(metadata.get("agent_name") or row.assistant_id or "default")
+        data["latest_run_id"] = row.run_id
+        data["last_message"] = row.last_ai_message or row.first_human_message
+        data["error_summary"] = row.error
+        return data
 
     async def write_admin_audit(
         self,
@@ -239,6 +248,82 @@ class PlatformRepository:
             .order_by(desc(ToolAuditLogRow.created_at), desc(ToolAuditLogRow.id))
             .limit(limit)
         )
+        async with self._sf() as session:
+            rows = (await session.execute(stmt)).scalars()
+            return [self._row_to_dict(row) for row in rows]
+
+    async def list_recent_monitoring_conversations(self, *, limit: int = 50, offset: int = 0, q: str | None = None) -> dict[str, Any]:
+        safe_limit = max(0, min(limit, 200))
+        safe_offset = max(0, offset)
+        filters = []
+        if q:
+            pattern = f"%{q.strip()}%"
+            filters.append(
+                or_(
+                    RunRow.run_id.ilike(pattern),
+                    RunRow.thread_id.ilike(pattern),
+                    RunRow.user_id.ilike(pattern),
+                    RunRow.assistant_id.ilike(pattern),
+                    RunRow.status.ilike(pattern),
+                    RunRow.first_human_message.ilike(pattern),
+                    RunRow.last_ai_message.ilike(pattern),
+                    RunRow.error.ilike(pattern),
+                )
+            )
+
+        latest_runs = (
+            select(
+                RunRow.run_id.label("run_id"),
+                func.row_number()
+                .over(
+                    partition_by=RunRow.thread_id,
+                    order_by=(
+                        desc(RunRow.updated_at),
+                        desc(RunRow.created_at),
+                        desc(RunRow.run_id),
+                    ),
+                )
+                .label("row_number"),
+            )
+            .where(*filters)
+            .subquery()
+        )
+        total_stmt = select(func.count(func.distinct(RunRow.thread_id))).where(*filters)
+        items_stmt = (
+            select(RunRow)
+            .join(latest_runs, RunRow.run_id == latest_runs.c.run_id)
+            .where(latest_runs.c.row_number == 1)
+            .order_by(desc(RunRow.updated_at), desc(RunRow.created_at), desc(RunRow.run_id))
+            .limit(safe_limit)
+            .offset(safe_offset)
+        )
+
+        async with self._sf() as session:
+            total = (await session.execute(total_stmt)).scalar_one()
+            rows = list((await session.execute(items_stmt)).scalars())
+
+        return {
+            "items": [self._run_row_to_monitoring_dict(row) for row in rows],
+            "total": int(total or 0),
+            "limit": safe_limit,
+            "offset": safe_offset,
+        }
+
+    async def get_run_for_admin(self, run_id: str) -> dict[str, Any] | None:
+        async with self._sf() as session:
+            row = await session.get(RunRow, run_id)
+        if row is None:
+            return None
+        return self._run_row_to_monitoring_dict(row)
+
+    async def list_runs_for_thread(self, thread_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        stmt = select(RunRow).where(RunRow.thread_id == thread_id).order_by(desc(RunRow.created_at), desc(RunRow.updated_at), desc(RunRow.run_id)).limit(max(0, min(limit, 200)))
+        async with self._sf() as session:
+            rows = (await session.execute(stmt)).scalars()
+            return [self._run_row_to_monitoring_dict(row) for row in rows]
+
+    async def list_tool_audits_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        stmt = select(ToolAuditLogRow).where(ToolAuditLogRow.run_id == run_id).order_by(ToolAuditLogRow.created_at.asc(), ToolAuditLogRow.id.asc())
         async with self._sf() as session:
             rows = (await session.execute(stmt)).scalars()
             return [self._row_to_dict(row) for row in rows]
