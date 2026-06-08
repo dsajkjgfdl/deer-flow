@@ -78,6 +78,92 @@ class FakePlatformRepo:
         return []
 
 
+class FakeMonitoringRepo(FakePlatformRepo):
+    def __init__(self) -> None:
+        super().__init__()
+        self.recent_calls: list[dict] = []
+
+    def _run(self) -> dict:
+        return {
+            "thread_id": "thread-im",
+            "run_id": "run-im",
+            "user_id": "internal",
+            "agent_name": "hr-boss-agent",
+            "model": "qwen3.5-plus",
+            "model_name": "qwen3.5-plus",
+            "status": "error",
+            "message_count": 2,
+            "first_human_message": "查询研发工程师人数",
+            "last_ai_message": "查询失败",
+            "error": "timeout",
+            "total_input_tokens": 12,
+            "total_output_tokens": 8,
+            "total_tokens": 20,
+            "llm_call_count": 1,
+            "created_at": "2026-06-08T05:39:20+00:00",
+            "updated_at": "2026-06-08T05:39:22+00:00",
+        }
+
+    async def list_recent_monitoring_conversations(self, **kwargs) -> list[dict]:
+        self.recent_calls.append(kwargs)
+        run = self._run()
+        return [
+            {
+                "thread_id": run["thread_id"],
+                "run_id": run["run_id"],
+                "user_id": run["user_id"],
+                "agent_name": run["agent_name"],
+                "status": run["status"],
+                "updated_at": run["updated_at"],
+                "message_count": run["message_count"],
+                "first_human_message": run["first_human_message"],
+                "error": run["error"],
+            }
+        ]
+
+    async def list_runs_for_thread(self, thread_id: str, limit: int = 100) -> list[dict]:
+        if thread_id != "thread-im":
+            return []
+        return [self._run()][:limit]
+
+    async def get_run_for_admin(self, run_id: str) -> dict | None:
+        if run_id != "run-im":
+            return None
+        return self._run()
+
+    async def list_tool_audits_for_run(self, run_id: str) -> list[dict]:
+        if run_id != "run-im":
+            return []
+        return [
+            {
+                "run_id": "run-im",
+                "thread_id": "thread-im",
+                "tool_name": "text2cypher_answer_question",
+                "mcp_server_name": "text2cypher",
+                "status": "error",
+                "latency_ms": 842,
+                "error": "timeout",
+                "created_at": "2026-06-08T05:39:24+00:00",
+                "metadata_json": {"argument_keys": ["question"]},
+            }
+        ]
+
+
+class FakeChannelStore:
+    async def list_entries(self) -> list[dict]:
+        return [
+            {
+                "channel_name": "feishu",
+                "chat_id": "oc_xxx",
+                "topic_id": "msg_xxx",
+                "thread_id": "thread-im",
+                "user_id": "ou_xxx",
+                "created_at": 1780897160.0,
+                "updated_at": 1780897162.0,
+            }
+        ]
+
+
 class FakeFeedbackRepo:
     async def summarize_for_admin(self) -> dict:
         return {
@@ -150,6 +236,31 @@ class FakeRunEventStore:
                 "content": {"type": "ai", "content": "There are 42 people in R&D."},
                 "seq": 2,
             },
+        ]
+
+
+class FakeTimelineRunEventStore(FakeRunEventStore):
+    async def list_events(self, thread_id, run_id, *, event_types=None, limit=500, user_id=None):
+        self.calls.append(
+            {
+                "thread_id": thread_id,
+                "run_id": run_id,
+                "event_types": event_types,
+                "limit": limit,
+                "user_id": user_id,
+            }
+        )
+        return [
+            {
+                "thread_id": thread_id,
+                "run_id": run_id,
+                "event_type": "run.start",
+                "category": "trace",
+                "content": {"chain": "graph"},
+                "metadata": {"caller": "lead_agent"},
+                "seq": 1,
+                "created_at": "2026-06-08T05:39:20+00:00",
+            }
         ]
 
 
@@ -382,6 +493,110 @@ def test_feedback_admin_routes_reject_normal_user():
 
     with TestClient(app) as client:
         response = client.get("/api/platform/admin/feedback/summary")
+
+    assert response.status_code == 403
+
+
+def test_admin_monitoring_recent_conversations_includes_im_raw_identity():
+    from app.gateway.routers import platform_admin
+
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = FakeMonitoringRepo()
+    app.state.channel_store = FakeChannelStore()
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        response = client.get("/api/platform/admin/monitoring/conversations/recent")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["limit"] == 50
+    item = data["items"][0]
+    assert item["identity"]["identity_type"] == "channel"
+    assert item["identity"]["identity_source"] == "feishu"
+    assert item["identity"]["raw_identity"] == {
+        "channel_user_id": "ou_xxx",
+        "chat_id": "oc_xxx",
+        "topic_id": "msg_xxx",
+    }
+    assert item["updated_at_bj"] == "2026-06-08 13:39:22"
+
+
+def test_admin_monitoring_conversation_detail_returns_runs_and_identity():
+    from app.gateway.routers import platform_admin
+
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = FakeMonitoringRepo()
+    app.state.channel_store = FakeChannelStore()
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        response = client.get("/api/platform/admin/monitoring/conversations/thread-im")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["thread_id"] == "thread-im"
+    assert data["identity"]["identity_display"] == "feishu: ou_xxx"
+    assert data["message_preview"] == "查询研发工程师人数"
+    assert data["runs"][0]["run_id"] == "run-im"
+    assert data["runs"][0]["updated_at_bj"] == "2026-06-08 13:39:22"
+
+
+def test_admin_monitoring_run_timeline_merges_events_and_tool_audit():
+    from app.gateway.routers import platform_admin
+
+    event_store = FakeTimelineRunEventStore()
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = FakeMonitoringRepo()
+    app.state.channel_store = FakeChannelStore()
+    app.state.run_event_store = event_store
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        response = client.get("/api/platform/admin/monitoring/runs/run-im/timeline")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["identity"]["raw_identity"]["channel_user_id"] == "ou_xxx"
+    assert [event["kind"] for event in data["events"]] == ["run.start", "tool.error"]
+    assert data["events"][1]["tool_name"] == "text2cypher_answer_question"
+    assert data["events"][1]["occurred_at_bj"] == "2026-06-08 13:39:24"
+    assert event_store.calls[-1]["user_id"] is None
+
+
+def test_admin_monitoring_run_messages_returns_admin_messages():
+    from app.gateway.routers import platform_admin
+
+    event_store = FakeRunEventStore()
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = FakeMonitoringRepo()
+    app.state.channel_store = FakeChannelStore()
+    app.state.run_event_store = event_store
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        response = client.get("/api/platform/admin/monitoring/runs/run-im/messages?limit=50")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["run"]["run_id"] == "run-im"
+    assert [message["event_type"] for message in data["messages"]] == [
+        "human_message",
+        "ai_message",
+    ]
+    assert event_store.calls[-1]["user_id"] is None
+
+
+def test_admin_monitoring_rejects_normal_user():
+    from app.gateway.routers import platform_admin
+
+    app = make_authed_test_app(user_factory=lambda: _user("user"))
+    app.state.platform_repo = FakeMonitoringRepo()
+    app.state.channel_store = FakeChannelStore()
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        response = client.get("/api/platform/admin/monitoring/conversations/recent")
 
     assert response.status_code == 403
 
