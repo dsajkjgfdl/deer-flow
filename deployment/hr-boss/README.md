@@ -46,6 +46,8 @@ set +a
 
 For WeCom/channel deployment, keep `GATEWAY_WORKERS=1`. Channel calls use a process-local internal auth token, so multiple Gateway workers can reject each other's internal LangGraph requests with 401.
 
+The HR Boss compose overlay also loads `deployment/hr-boss/.env` into the Gateway container. After changing `WECOM_BOT_ID` or `WECOM_BOT_SECRET`, recreate the Gateway container so `config.yaml` can resolve the new `$WECOM_*` values from the container environment.
+
 Prepare external MCP virtual environments on the server before starting Gateway:
 
 ```bash

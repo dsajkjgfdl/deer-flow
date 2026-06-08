@@ -212,6 +212,8 @@ WECOM_BOT_ID=your_wecom_bot_id
 WECOM_BOT_SECRET=your_wecom_bot_secret
 ```
 
+HR Boss Docker overlay 会把 `deployment/hr-boss/.env` 作为 Gateway 容器的可选 `env_file` 注入。修改 `WECOM_BOT_ID` 或 `WECOM_BOT_SECRET` 后，重新创建 `gateway` 容器即可让 `config.yaml` 中的 `$WECOM_*` 读取到新值。
+
 如果 Neo4j 不使用 overlay 中的 `neo4j` 服务，而是连接外部 Neo4j，`TEXT2CYPHER_NEO4J_URI` 写真实内网地址，例如 `bolt://10.0.0.12:7687`。
 
 ## 7. 配置 `hr-boss-agent`

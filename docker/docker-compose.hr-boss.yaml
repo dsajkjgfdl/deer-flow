@@ -100,6 +100,9 @@ services:
     depends_on:
       neo4j:
         condition: service_healthy
+    env_file:
+      - path: ../deployment/hr-boss/.env
+        required: false
     volumes:
       - ../scripts:/app/scripts:ro
       - ../backend/.deer-flow/agents:/app/backend/.deer-flow/agents:ro
