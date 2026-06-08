@@ -1,7 +1,6 @@
 import { expect, test } from "vitest";
 
 import { parseImportedRunTimeline } from "@/core/platform/monitoring-import";
-
 import type {
   MonitoringConversationDetail,
   MonitoringRunTimeline,

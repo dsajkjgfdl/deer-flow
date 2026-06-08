@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  type MonitoringConversationFilters,
   fetchFeedbackConversation,
   fetchFeedbackSummary,
   fetchMonitoringConversation,
@@ -17,8 +18,6 @@ import {
   listUserAgentAssignments,
   revokeUserAgent,
 } from "./api";
-
-import type { MonitoringConversationFilters } from "./api";
 
 export function useAgentCatalog() {
   const { data, isLoading, error } = useQuery({
