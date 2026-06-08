@@ -104,6 +104,80 @@ test("parseImportedRunTimeline accepts imported events with missing or null seq"
   expect(nullSeqParsed.ok).toBe(true);
 });
 
+test("parseImportedRunTimeline rejects non-object events", () => {
+  const parsed = parseImportedRunTimeline(
+    JSON.stringify({
+      run: { run_id: "run-1", thread_id: "thread-1" },
+      events: [null],
+    }),
+  );
+
+  expect(parsed.ok).toBe(false);
+  if (!parsed.ok) {
+    expect(parsed.error).toContain("events[0]");
+  }
+});
+
+test("parseImportedRunTimeline rejects unsupported event source", () => {
+  const parsed = parseImportedRunTimeline(
+    JSON.stringify({
+      run: { run_id: "run-1", thread_id: "thread-1" },
+      events: [{ kind: "run.start", source: "bad", metadata: {} }],
+    }),
+  );
+
+  expect(parsed.ok).toBe(false);
+});
+
+test("parseImportedRunTimeline defaults missing event metadata", () => {
+  const parsed = parseImportedRunTimeline(
+    JSON.stringify({
+      run: { run_id: "run-1", thread_id: "thread-1" },
+      events: [{ kind: "run.start", source: "run_event" }],
+    }),
+  );
+
+  expect(parsed.ok).toBe(true);
+  if (parsed.ok) {
+    expect(parsed.data.events[0]?.metadata).toEqual({});
+  }
+});
+
+test("parseImportedRunTimeline rejects invalid event metadata and seq", () => {
+  const invalidMetadata = parseImportedRunTimeline(
+    JSON.stringify({
+      run: { run_id: "run-1", thread_id: "thread-1" },
+      events: [{ kind: "run.start", source: "run_event", metadata: "bad" }],
+    }),
+  );
+  const invalidSeq = parseImportedRunTimeline(
+    JSON.stringify({
+      run: { run_id: "run-1", thread_id: "thread-1" },
+      events: [
+        { seq: "1", kind: "run.start", source: "run_event", metadata: {} },
+      ],
+    }),
+  );
+
+  expect(invalidMetadata.ok).toBe(false);
+  expect(invalidSeq.ok).toBe(false);
+});
+
+test("parseImportedRunTimeline falls back when identity object is incomplete", () => {
+  const parsed = parseImportedRunTimeline(
+    JSON.stringify({
+      run: { run_id: "run-1", thread_id: "thread-1" },
+      identity: {},
+      events: [{ kind: "run.start", source: "run_event", metadata: {} }],
+    }),
+  );
+
+  expect(parsed.ok).toBe(true);
+  if (parsed.ok) {
+    expect(parsed.data.identity.identity_source).toBe("imported");
+  }
+});
+
 test("MonitoringConversationDetail uses backend string message preview", () => {
   const detail: MonitoringConversationDetail = {
     identity: {

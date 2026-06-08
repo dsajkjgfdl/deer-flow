@@ -2,6 +2,7 @@ import { beforeEach, expect, test, vi } from "vitest";
 
 import type {
   MonitoringConversationsPage,
+  MonitoringRunItem,
   MonitoringRunTimeline,
 } from "@/core/platform/types";
 
@@ -275,6 +276,96 @@ test("fetchRecentMonitoringConversations normalizes actual backend conversation 
       },
     ],
   });
+});
+
+test("fetchRecentMonitoringConversations serializes non-empty optional filters", async () => {
+  fetchWithAuth.mockResolvedValue({
+    ok: true,
+    json: async () => ({ items: [], total: 0, limit: 25, offset: 5 }),
+  });
+
+  const { fetchRecentMonitoringConversations } =
+    await import("@/core/platform/api");
+
+  await fetchRecentMonitoringConversations({
+    limit: 25,
+    offset: 5,
+    source: "feishu",
+    agent_name: "",
+    status: "error",
+    q: "研发",
+  });
+
+  const requestedUrl = fetchWithAuth.mock.calls[0]?.[0] as string;
+  expect(requestedUrl).toContain("limit=25");
+  expect(requestedUrl).toContain("offset=5");
+  expect(requestedUrl).toContain("source=feishu");
+  expect(requestedUrl).toContain("status=error");
+  expect(requestedUrl).toContain("q=%E7%A0%94%E5%8F%91");
+  expect(requestedUrl).not.toContain("agent_name=");
+});
+
+test("fetchMonitoringConversation requests one monitoring conversation", async () => {
+  fetchWithAuth.mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      identity: {
+        identity_type: "channel",
+        identity_source: "feishu",
+        identity_display: "feishu: ou_xxx",
+        raw_identity: {},
+      },
+      thread_id: "thread-im",
+      runs: [],
+      message_preview: "hello",
+    }),
+  });
+
+  const { fetchMonitoringConversation } = await import("@/core/platform/api");
+
+  await expect(fetchMonitoringConversation("thread-im")).resolves.toMatchObject(
+    {
+      thread_id: "thread-im",
+      message_preview: "hello",
+    },
+  );
+  expect(fetchWithAuth).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "/api/platform/admin/monitoring/conversations/thread-im",
+    ),
+  );
+});
+
+test("MonitoringRunItem accepts backend supplemental run fields", () => {
+  const run = {
+    run_id: "run-1",
+    thread_id: "thread-1",
+    latest_run_id: "run-1",
+    agent_name: "hr-boss-agent",
+    status: "success",
+    model_name: "qwen3.5-plus",
+    model: "qwen3.5-plus",
+    message_count: 2,
+    first_human_message: "hi",
+    last_ai_message: "hello",
+    last_message: "hello",
+    message_preview: "hi",
+    total_tokens: 30,
+    total_input_tokens: 10,
+    total_output_tokens: 20,
+    lead_agent_tokens: 12,
+    subagent_tokens: 8,
+    middleware_tokens: 10,
+    llm_call_count: 1,
+    error: null,
+    error_summary: null,
+    created_at: null,
+    created_at_bj: null,
+    updated_at: null,
+    updated_at_bj: null,
+  } satisfies MonitoringRunItem;
+
+  expect(run.total_input_tokens).toBe(10);
 });
 
 test("fetchMonitoringRunTimeline accepts sparse run_event timeline items", async () => {

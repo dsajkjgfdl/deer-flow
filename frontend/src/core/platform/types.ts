@@ -183,15 +183,25 @@ export interface MonitoringConversationItem {
 export interface MonitoringRunItem {
   run_id: string;
   thread_id: string;
+  latest_run_id?: string | null;
   agent_name: string | null;
   status: string;
   model_name: string | null;
+  model?: string | null;
   message_count: number;
   first_human_message: string | null;
   last_ai_message: string | null;
+  last_message?: string | null;
+  message_preview?: string | null;
   total_tokens: number;
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  lead_agent_tokens?: number;
+  subagent_tokens?: number;
+  middleware_tokens?: number;
   llm_call_count: number;
   error: string | null;
+  error_summary?: string | null;
   created_at: string | null;
   created_at_bj: string | null;
   updated_at: string | null;
