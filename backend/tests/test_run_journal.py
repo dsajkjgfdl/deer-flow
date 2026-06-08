@@ -216,6 +216,28 @@ class TestToolCallbacks:
         assert tool_events[0]["metadata"]["mcp_server_name"] == "text2cypher"
 
     @pytest.mark.anyio
+    async def test_on_tool_start_metadata_cannot_override_system_fields(self, journal_setup):
+        j, store = journal_setup
+        run_id = uuid4()
+        j.on_tool_start(
+            {"name": "text2cypher_answer_question"},
+            "question=研发部门有多少人？",
+            run_id=run_id,
+            tags=["lead_agent"],
+            metadata={
+                "caller": "spoofed",
+                "tool_call_id": "spoofed-call",
+                "mcp_server_name": "text2cypher",
+            },
+        )
+        await j.flush()
+        events = await store.list_events("t1", "r1")
+        tool_event = [e for e in events if e["event_type"] == "tool.start"][0]
+        assert tool_event["metadata"]["caller"] == "lead_agent"
+        assert tool_event["metadata"]["tool_call_id"] == str(run_id)
+        assert tool_event["metadata"]["mcp_server_name"] == "text2cypher"
+
+    @pytest.mark.anyio
     async def test_tool_end_with_tool_message(self, journal_setup):
         """on_tool_end with a ToolMessage stores it as llm.tool.result."""
         from langchain_core.messages import ToolMessage
@@ -267,6 +289,32 @@ class TestToolCallbacks:
         assert tool_events[0]["metadata"]["error_type"] == "TimeoutError"
         assert tool_events[0]["metadata"]["tool_name"] == "web_fetch"
         assert tool_events[0]["metadata"]["mcp_server_name"] == "web"
+
+    @pytest.mark.anyio
+    async def test_on_tool_error_metadata_cannot_override_system_fields(self, journal_setup):
+        j, store = journal_setup
+        run_id = uuid4()
+        j.on_tool_error(
+            TimeoutError("timeout"),
+            run_id=run_id,
+            tags=["subagent:research"],
+            metadata={
+                "caller": "spoofed",
+                "tool_call_id": "spoofed-call",
+                "tool_name": "spoofed_tool",
+                "error_type": "SpoofedError",
+                "mcp_server_name": "web",
+            },
+            name="web_fetch",
+        )
+        await j.flush()
+        events = await store.list_events("t1", "r1")
+        tool_event = [e for e in events if e["event_type"] == "tool.error"][0]
+        assert tool_event["metadata"]["caller"] == "subagent:research"
+        assert tool_event["metadata"]["tool_call_id"] == str(run_id)
+        assert tool_event["metadata"]["tool_name"] == "web_fetch"
+        assert tool_event["metadata"]["error_type"] == "TimeoutError"
+        assert tool_event["metadata"]["mcp_server_name"] == "web"
 
 
 class TestCustomEvents:

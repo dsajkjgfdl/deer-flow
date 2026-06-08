@@ -325,7 +325,7 @@ class RunJournal(BaseCallbackHandler):
                 "input": input_str,
                 "input_keys": sorted(inputs.keys()) if isinstance(inputs, dict) else [],
             },
-            metadata={"caller": caller, "tool_call_id": tool_call_id, **(metadata or {})},
+            metadata={**(metadata or {}), "caller": caller, "tool_call_id": tool_call_id},
         )
 
     def on_tool_error(self, error, *, run_id, parent_run_id=None, tags=None, metadata=None, name=None, **kwargs):
@@ -337,11 +337,11 @@ class RunJournal(BaseCallbackHandler):
             category="error",
             content=str(error),
             metadata={
+                **(metadata or {}),
                 "caller": caller,
                 "tool_call_id": tool_call_id,
                 "tool_name": name or kwargs.get("tool_name") or "unknown",
                 "error_type": type(error).__name__,
-                **(metadata or {}),
             },
         )
 
