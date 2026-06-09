@@ -471,7 +471,56 @@ def _format_hr_boss_recommendation_record(record: dict, *, label: str) -> list[s
     return lines[:4]
 
 
-def _format_hr_boss_recommendation_answer(value) -> str:
+def _recommendation_selected_values(payload: dict) -> list[str]:
+    selected_values = payload.get("selected_values")
+    if not isinstance(selected_values, dict):
+        return []
+
+    values: list[str] = []
+    for candidates in selected_values.values():
+        if not isinstance(candidates, list):
+            continue
+        for candidate in candidates:
+            text = str(candidate).strip()
+            if text and text not in values:
+                values.append(text)
+    return values
+
+
+def _format_hr_boss_recommendation_basis(payload: dict, *, question: str) -> str:
+    parts: list[str] = []
+
+    scope = str(payload.get("scope") or "").strip()
+    if scope:
+        parts.append(f"范围：{scope}")
+
+    selected_values = _recommendation_selected_values(payload)
+    if selected_values:
+        displayed = "、".join(selected_values[:6])
+        if len(selected_values) > 6:
+            displayed += "等"
+        parts.append(f"候选口径：{displayed}")
+
+    assumptions = payload.get("assumptions")
+    if isinstance(assumptions, list):
+        assumption_text = "；".join(str(item).strip() for item in assumptions[:2] if str(item).strip())
+        if assumption_text:
+            parts.append(f"业务假设：{assumption_text}")
+
+    if not parts and question.strip():
+        compact_question = " ".join(question.split())
+        if len(compact_question) > 60:
+            compact_question = f"{compact_question[:57]}..."
+        parts.append(f"查询要求：{compact_question}")
+
+    if parts:
+        basis = "；".join(parts)
+    else:
+        basis = "候选依据来自结构化员工数据中的岗位、部门、职称、教育及相关经历"
+    return f"说明：{basis}；正式任用前建议再核实关键经历。"
+
+
+def _format_hr_boss_recommendation_answer(value, *, question: str = "") -> str:
     payload = _text2cypher_payload_from_tool_result(value)
     if not payload:
         return "已完成查询，但结果格式无法直接转写，请稍后重试或缩小推荐条件。"
@@ -481,7 +530,7 @@ def _format_hr_boss_recommendation_answer(value) -> str:
     execution = payload.get("execution")
     records = execution.get("records") if isinstance(execution, dict) else None
     if not isinstance(records, list) or not records:
-        return "当前条件下没有查到可推荐的瓷粉研发候选人。"
+        return "当前条件下没有查到可推荐的候选人。"
 
     lines: list[str] = []
     lines.extend(_format_hr_boss_recommendation_record(records[0], label="首推"))
@@ -489,7 +538,7 @@ def _format_hr_boss_recommendation_answer(value) -> str:
         lines.append("")
         lines.extend(_format_hr_boss_recommendation_record(record, label="备选"))
     lines.append("")
-    lines.append("说明：按集团当前在职员工中瓷粉、陶瓷、材料研发相关证据排序；正式任用前建议再核实带团队经历。")
+    lines.append(_format_hr_boss_recommendation_basis(payload, question=question))
     return "\n".join(lines)
 
 
@@ -506,11 +555,17 @@ def _hr_boss_recommendation_direct_message(answer: str, runtime: ToolRuntime) ->
 
 def _wrap_hr_boss_recommendation_direct_tool(tool: BaseTool) -> BaseTool:
     def _run(runtime: ToolRuntime, **kwargs):
-        answer = _format_hr_boss_recommendation_answer(tool.invoke(kwargs))
+        answer = _format_hr_boss_recommendation_answer(
+            tool.invoke(kwargs),
+            question=str(kwargs.get("question") or ""),
+        )
         return _hr_boss_recommendation_direct_message(answer, runtime)
 
     async def _arun(runtime: ToolRuntime, **kwargs):
-        answer = _format_hr_boss_recommendation_answer(await tool.ainvoke(kwargs))
+        answer = _format_hr_boss_recommendation_answer(
+            await tool.ainvoke(kwargs),
+            question=str(kwargs.get("question") or ""),
+        )
         return _hr_boss_recommendation_direct_message(answer, runtime)
 
     return StructuredTool.from_function(

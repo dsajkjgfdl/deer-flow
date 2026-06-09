@@ -139,6 +139,27 @@ def test_hr_boss_recommendation_fast_path_ignores_plain_statistics():
     )
 
 
+def test_hr_boss_recommendation_fast_path_ignores_statistics_with_find_wording():
+    from app.gateway.services import should_use_hr_boss_recommendation_fast_path
+
+    assert not should_use_hr_boss_recommendation_fast_path(
+        {"messages": [{"role": "user", "content": "帮我找一下销售工程师有多少人"}]},
+        assistant_id="lead_agent",
+        context={"agent_name": "hr-boss-agent"},
+    )
+
+
+def test_hr_boss_recommendation_fast_path_detects_non_research_roles():
+    from app.gateway.services import should_use_hr_boss_recommendation_fast_path
+
+    for question in ("帮我找一个销售经理", "我需要一名财务主管", "我需要一名法务"):
+        assert should_use_hr_boss_recommendation_fast_path(
+            {"messages": [{"role": "user", "content": question}]},
+            assistant_id="lead_agent",
+            context={"agent_name": "hr-boss-agent"},
+        )
+
+
 def test_normalize_input_none():
     from app.gateway.services import normalize_input
 

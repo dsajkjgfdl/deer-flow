@@ -144,6 +144,55 @@ def test_hr_boss_recommendation_formatter_returns_concise_leader_answer():
     assert len(answer) < 500
 
 
+def test_hr_boss_recommendation_formatter_uses_dynamic_business_scope():
+    from deerflow.agents.lead_agent.agent import _format_hr_boss_recommendation_answer
+
+    answer = _format_hr_boss_recommendation_answer(
+        {
+            "status": "success",
+            "answerable": True,
+            "scope": "全集团当前员工",
+            "assumptions": ["优先考虑有销售管理经验的当前员工"],
+            "selected_values": {"Position": ["销售经理", "区域销售经理"]},
+            "execution": {
+                "records": [
+                    {
+                        "employee_id": "HJ2001",
+                        "employee_name": "候选甲",
+                        "current_position": "区域销售经理",
+                        "current_department": "销售中心",
+                        "tenure_years": 8.2,
+                    }
+                ]
+            },
+        },
+        question="帮我找一个销售经理",
+    )
+
+    assert "首推：候选甲（HJ2001）" in answer
+    assert "全集团当前员工" in answer
+    assert "销售经理、区域销售经理" in answer
+    assert "优先考虑有销售管理经验的当前员工" in answer
+    assert "瓷粉" not in answer
+    assert "陶瓷" not in answer
+    assert "材料研发" not in answer
+
+
+def test_hr_boss_recommendation_formatter_empty_result_is_domain_neutral():
+    from deerflow.agents.lead_agent.agent import _format_hr_boss_recommendation_answer
+
+    answer = _format_hr_boss_recommendation_answer(
+        {
+            "status": "success",
+            "answerable": True,
+            "execution": {"records": []},
+        },
+        question="我需要一名财务主管",
+    )
+
+    assert answer == "当前条件下没有查到可推荐的候选人。"
+
+
 def test_hr_boss_recommendation_direct_tool_wraps_text2cypher_tool():
     from types import SimpleNamespace
 

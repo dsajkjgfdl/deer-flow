@@ -135,7 +135,15 @@ def should_use_hr_boss_recommendation_fast_path(
     if not text.strip():
         return False
 
-    recommendation_terms = ("推荐", "候选", "人选", "人岗匹配", "匹配", "适合", "帮我找", "找一个", "找一名", "需要一个", "需要一名")
+    statistics_terms = ("多少", "几人", "人数", "数量", "统计", "平均", "占比", "比例", "分布", "排名", "排行", "最多", "最少")
+    if any(term in text for term in statistics_terms):
+        return False
+
+    high_confidence_person_terms = ("找一个", "找一名", "需要一名", "推荐一名")
+    if any(term in text for term in high_confidence_person_terms):
+        return True
+
+    recommendation_terms = ("推荐", "候选", "人选", "人岗匹配", "匹配", "适合", "需要一个")
     talent_terms = ("经理", "主管", "负责人", "工程师", "研发", "销售", "人才", "岗位", "人员", "员工", "瓷粉")
     return any(term in text for term in recommendation_terms) and any(term in text for term in talent_terms)
 
