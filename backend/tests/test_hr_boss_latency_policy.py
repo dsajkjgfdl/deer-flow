@@ -106,6 +106,7 @@ def test_hr_boss_recommendation_formatter_returns_concise_leader_answer():
         {
             "status": "success",
             "answerable": True,
+            "result_type": "recommendation",
             "execution": {
                 "records": [
                     {
@@ -151,6 +152,7 @@ def test_hr_boss_recommendation_formatter_uses_dynamic_business_scope():
         {
             "status": "success",
             "answerable": True,
+            "result_type": "recommendation",
             "scope": "全集团当前员工",
             "assumptions": ["优先考虑有销售管理经验的当前员工"],
             "selected_values": {"Position": ["销售经理", "区域销售经理"]},
@@ -185,6 +187,7 @@ def test_hr_boss_recommendation_formatter_empty_result_is_domain_neutral():
         {
             "status": "success",
             "answerable": True,
+            "result_type": "recommendation",
             "execution": {"records": []},
         },
         question="我需要一名财务主管",
@@ -218,6 +221,31 @@ def test_hr_boss_recommendation_formatter_rejects_noncanonical_result_schema():
     assert "首推：候选人" not in answer
 
 
+def test_hr_boss_recommendation_formatter_rejects_records_result_type():
+    from deerflow.agents.lead_agent.agent import _format_hr_boss_recommendation_answer
+
+    answer = _format_hr_boss_recommendation_answer(
+        {
+            "status": "success",
+            "answerable": True,
+            "result_type": "records",
+            "execution": {
+                "records": [
+                    {
+                        "employee_name": "候选甲",
+                        "current_position": "销售经理",
+                        "current_department": "销售中心",
+                    }
+                ]
+            },
+        },
+        question="帮我找一个销售经理",
+    )
+
+    assert "结果类型不是 recommendation" in answer
+    assert "首推：候选甲" not in answer
+
+
 def test_hr_boss_recommendation_direct_tool_wraps_text2cypher_tool():
     from types import SimpleNamespace
 
@@ -230,6 +258,7 @@ def test_hr_boss_recommendation_direct_tool_wraps_text2cypher_tool():
         return {
             "status": "success",
             "answerable": True,
+            "result_type": "recommendation",
             "execution": {
                 "records": [
                     {

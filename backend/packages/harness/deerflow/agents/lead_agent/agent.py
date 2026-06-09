@@ -526,6 +526,8 @@ def _format_hr_boss_recommendation_answer(value, *, question: str = "") -> str:
         return "已完成查询，但结果格式无法直接转写，请稍后重试或缩小推荐条件。"
     if payload.get("status") != "success" or payload.get("answerable") is False:
         return str(payload.get("limitation") or "当前条件下没有形成可靠推荐结果，需要先补充岗位范围或筛选条件。")
+    if payload.get("result_type") != "recommendation":
+        return "推荐查询结果类型不是 recommendation，无法可靠生成候选建议。"
 
     execution = payload.get("execution")
     records = execution.get("records") if isinstance(execution, dict) else None
