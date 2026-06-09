@@ -2,6 +2,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  ActivityIcon,
   AlertCircleIcon,
   RefreshCwIcon,
   SearchIcon,
@@ -29,10 +30,9 @@ import {
 
 import { ConversationDetail } from "./conversation-detail";
 import { ConversationList } from "./conversation-list";
-import { EventInspector } from "./event-inspector";
 import { eventKey } from "./format";
 import { ImportRunDialog } from "./import-run-dialog";
-import { RunTimeline } from "./run-timeline";
+import { RunInspectionDialog } from "./run-inspection-dialog";
 
 const SOURCE_OPTIONS = [
   "all",
@@ -79,6 +79,7 @@ export function AgentMonitoringPage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedEventKey, setSelectedEventKey] = useState<string | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [runInspectionOpen, setRunInspectionOpen] = useState(false);
   const [importedTimeline, setImportedTimeline] =
     useState<MonitoringRunTimeline | null>(null);
 
@@ -88,7 +89,16 @@ export function AgentMonitoringPage() {
   const conversationDetail = useMonitoringConversation(liveThreadId);
   const liveTimeline = useMonitoringRunTimeline(liveRunId);
   const activeTimeline = importedTimeline ?? liveTimeline.timeline;
+  const activeIdentity =
+    activeTimeline?.identity ??
+    conversationDetail.conversation?.identity ??
+    null;
   const events = activeTimeline?.events ?? EMPTY_EVENTS;
+  const isRunTimelineLoading =
+    importedTimeline || liveTimeline.error
+      ? false
+      : liveTimeline.isLoading ||
+        (runInspectionOpen && Boolean(selectedRunId) && !activeTimeline);
   const selectedEvent = useMemo(() => {
     if (!selectedEventKey) return null;
     return (
@@ -105,6 +115,7 @@ export function AgentMonitoringPage() {
     setSelectedThreadId(null);
     setSelectedRunId(null);
     setSelectedEventKey(null);
+    setRunInspectionOpen(false);
   }
 
   function updateFilters(patch: Partial<typeof filters>) {
@@ -117,7 +128,11 @@ export function AgentMonitoringPage() {
   }
 
   useEffect(() => {
-    if (importedTimeline || selectedThreadId || conversations.page.items.length === 0) {
+    if (
+      importedTimeline ||
+      selectedThreadId ||
+      conversations.page.items.length === 0
+    ) {
       return;
     }
 
@@ -149,7 +164,9 @@ export function AgentMonitoringPage() {
     }
 
     const exists = selectedEventKey
-      ? events.some((event, index) => eventKey(event, index) === selectedEventKey)
+      ? events.some(
+          (event, index) => eventKey(event, index) === selectedEventKey,
+        )
       : false;
     if (!exists) {
       const firstEvent = events[0];
@@ -162,12 +179,14 @@ export function AgentMonitoringPage() {
     setSelectedThreadId(threadId);
     setSelectedRunId(latestRunId);
     setSelectedEventKey(null);
+    setRunInspectionOpen(false);
   }
 
   function handleSelectRun(runId: string) {
     setImportedTimeline(null);
     setSelectedRunId(runId);
     setSelectedEventKey(null);
+    setRunInspectionOpen(true);
   }
 
   function handleImported(timeline: MonitoringRunTimeline) {
@@ -177,6 +196,7 @@ export function AgentMonitoringPage() {
     setSelectedEventKey(
       timeline.events[0] ? eventKey(timeline.events[0], 0) : null,
     );
+    setRunInspectionOpen(true);
   }
 
   function handleRefresh() {
@@ -314,6 +334,15 @@ export function AgentMonitoringPage() {
             <RefreshCwIcon className="size-4" />
             Refresh
           </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={!selectedRunId}
+            onClick={() => setRunInspectionOpen(true)}
+          >
+            <ActivityIcon className="size-4" />
+            Inspect run
+          </Button>
           <Button type="button" onClick={() => setImportDialogOpen(true)}>
             <UploadIcon className="size-4" />
             Import
@@ -329,7 +358,7 @@ export function AgentMonitoringPage() {
         )}
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[360px_minmax(360px,1fr)_minmax(420px,1.2fr)]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[360px_minmax(520px,1fr)]">
         <ConversationList
           items={conversations.page.items}
           selectedThreadId={selectedThreadId}
@@ -337,22 +366,27 @@ export function AgentMonitoringPage() {
           onSelectThread={handleSelectThread}
         />
         <ConversationDetail
-          conversation={importedTimeline ? null : conversationDetail.conversation}
+          conversation={
+            importedTimeline ? null : conversationDetail.conversation
+          }
           selectedRunId={selectedRunId}
           isLoading={importedTimeline ? false : conversationDetail.isLoading}
           onSelectRun={handleSelectRun}
         />
-        <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_minmax(220px,34vh)]">
-          <RunTimeline
-            timeline={activeTimeline}
-            selectedEventKey={selectedEventKey}
-            onSelectEventKey={setSelectedEventKey}
-            isLoading={importedTimeline ? false : liveTimeline.isLoading}
-            isImported={Boolean(importedTimeline)}
-          />
-          <EventInspector event={selectedEvent} />
-        </div>
       </div>
+
+      <RunInspectionDialog
+        open={runInspectionOpen}
+        onOpenChange={setRunInspectionOpen}
+        runId={selectedRunId}
+        identity={activeIdentity}
+        timeline={activeTimeline}
+        selectedEventKey={selectedEventKey}
+        onSelectEventKey={setSelectedEventKey}
+        selectedEvent={selectedEvent}
+        isLoading={isRunTimelineLoading}
+        isImported={Boolean(importedTimeline)}
+      />
 
       <ImportRunDialog
         open={importDialogOpen}

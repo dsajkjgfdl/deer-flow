@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from fastapi import HTTPException, Request
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.messages.utils import convert_to_messages
 
 from app.gateway.deps import get_run_context, get_run_manager, get_stream_bridge
@@ -111,6 +111,38 @@ def normalize_input(raw_input: dict[str, Any] | None) -> dict[str, Any]:
                 converted.append(msg)
         return {**raw_input, "messages": converted}
     return raw_input
+
+
+def first_human_message_text(graph_input: dict[str, Any]) -> str | None:
+    """Return the latest non-summary human message from normalized graph input."""
+    messages = graph_input.get("messages")
+    if not isinstance(messages, list):
+        return None
+
+    for message in reversed(messages):
+        if not isinstance(message, HumanMessage) or message.name == "summary":
+            continue
+        content = message.content
+        if isinstance(content, str):
+            text = content.strip()
+        elif isinstance(content, list):
+            parts: list[str] = []
+            for block in content:
+                if isinstance(block, str):
+                    parts.append(block)
+                elif isinstance(block, Mapping):
+                    value = block.get("text") or block.get("content")
+                    if isinstance(value, str):
+                        parts.append(value)
+            text = "".join(parts).strip()
+        elif isinstance(content, Mapping):
+            value = content.get("text") or content.get("content")
+            text = value.strip() if isinstance(value, str) else ""
+        else:
+            text = ""
+        if text:
+            return text[:2000]
+    return None
 
 
 _DEFAULT_ASSISTANT_ID = "lead_agent"
@@ -420,6 +452,9 @@ async def start_run(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    graph_input = normalize_input(body.input)
+    first_human_message = first_human_message_text(graph_input)
+
     try:
         record = await run_mgr.create_or_reject(
             thread_id,
@@ -429,6 +464,8 @@ async def start_run(
             kwargs={"input": body.input, "config": body.config},
             multitask_strategy=body.multitask_strategy,
             model_name=model_name,
+            first_human_message=first_human_message,
+            message_count=1 if first_human_message else 0,
         )
     except ConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -452,7 +489,6 @@ async def start_run(
         logger.warning("Failed to upsert thread_meta for %s (non-fatal)", sanitize_log_param(thread_id))
 
     agent_factory = resolve_agent_factory(body.assistant_id)
-    graph_input = normalize_input(body.input)
     config = build_run_config(thread_id, body.config, body.metadata, assistant_id=body.assistant_id)
 
     # Merge DeerFlow-specific context overrides into both ``configurable`` and ``context``.

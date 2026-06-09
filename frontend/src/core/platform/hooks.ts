@@ -19,6 +19,8 @@ import {
   revokeUserAgent,
 } from "./api";
 
+const MONITORING_ACTIVE_RUN_STATUSES = new Set(["pending", "running"]);
+
 export function useAgentCatalog() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["platform", "admin", "agents", "catalog"],
@@ -149,6 +151,12 @@ export function useMonitoringConversation(threadId: string | null) {
     queryKey: ["platform", "admin", "monitoring", "conversations", threadId],
     queryFn: () => fetchMonitoringConversation(threadId!),
     enabled: Boolean(threadId),
+    refetchInterval: (query) =>
+      query.state.data?.runs.some((run) =>
+        MONITORING_ACTIVE_RUN_STATUSES.has(run.status.toLowerCase()),
+      )
+        ? 2_000
+        : false,
   });
   return { conversation: data ?? null, isLoading, error };
 }

@@ -124,6 +124,33 @@ def test_normalize_input_passes_through_basemessage_instances():
     assert result["messages"][0] is msg
 
 
+def test_first_human_message_text_returns_latest_non_summary_human_message():
+    from app.gateway.services import first_human_message_text, normalize_input
+
+    graph_input = normalize_input(
+        {
+            "messages": [
+                {"role": "user", "content": "older question"},
+                {"role": "assistant", "content": "older answer"},
+                {
+                    "role": "user",
+                    "name": "summary",
+                    "content": "conversation summary",
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "latest "},
+                        {"type": "text", "text": "question"},
+                    ],
+                },
+            ]
+        }
+    )
+
+    assert first_human_message_text(graph_input) == "latest question"
+
+
 def test_normalize_input_rejects_malformed_message_with_400():
     """Boundary validation: ``convert_to_messages`` raises ``ValueError`` when a
     message dict is missing ``role``/``type``/``content``.  ``normalize_input``

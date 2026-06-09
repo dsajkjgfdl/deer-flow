@@ -30,6 +30,8 @@ class RunStore(abc.ABC):
         kwargs: dict[str, Any] | None = None,
         error: str | None = None,
         created_at: str | None = None,
+        message_count: int = 0,
+        first_human_message: str | None = None,
     ) -> None:
         pass
 

@@ -10,7 +10,10 @@ import {
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import type { MonitoringConversationDetail } from "@/core/platform";
+import type {
+  MonitoringConversationDetail,
+  MonitoringRunItem,
+} from "@/core/platform";
 import { cn } from "@/lib/utils";
 
 import {
@@ -32,6 +35,33 @@ function displayText(value?: string | null): string {
   const text = value?.trim();
   if (!text) return "-";
   return text;
+}
+
+function isInternalPromptText(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return (
+    normalized.includes("<role>") ||
+    normalized.includes("<primary_objective>") ||
+    normalized.includes("context extraction assistant") ||
+    normalized.includes("your sole objective")
+  );
+}
+
+function runQuestionText(run: MonitoringRunItem): string | null {
+  const candidates = [
+    run.first_human_message,
+    run.message_preview,
+    run.last_message,
+  ];
+
+  for (const candidate of candidates) {
+    const text = candidate?.trim();
+    if (text && !isInternalPromptText(text)) {
+      return text;
+    }
+  }
+
+  return null;
 }
 
 function runErrorText(
@@ -89,7 +119,7 @@ export function ConversationDetail({
             </div>
             <Badge variant="outline">{conversation.runs.length} runs</Badge>
           </div>
-          <p className="text-muted-foreground line-clamp-3 break-words text-xs">
+          <p className="text-muted-foreground line-clamp-3 text-xs break-words">
             {displayText(conversation.message_preview)}
           </p>
         </div>
@@ -104,13 +134,14 @@ export function ConversationDetail({
               {conversation.runs.map((run) => {
                 const runError = runErrorText(run.error_summary, run.error);
                 const isSelected = run.run_id === selectedRunId;
+                const question = runQuestionText(run);
 
                 return (
                   <button
                     key={run.run_id}
                     type="button"
                     className={cn(
-                      "hover:bg-muted/50 flex w-full flex-col gap-2 px-4 py-3 text-left transition-colors focus-visible:bg-muted focus-visible:outline-none",
+                      "hover:bg-muted/50 focus-visible:bg-muted flex w-full flex-col gap-2 px-4 py-3 text-left transition-colors focus-visible:outline-none",
                       isSelected && "bg-muted/70",
                     )}
                     onClick={() => onSelectRun(run.run_id)}
@@ -133,6 +164,21 @@ export function ConversationDetail({
                       <Badge variant={statusVariant(run.status)}>
                         {run.status}
                       </Badge>
+                    </div>
+
+                    <div className="bg-muted/30 rounded-md border px-3 py-2">
+                      <div className="text-muted-foreground mb-1 text-xs font-medium">
+                        Question
+                      </div>
+                      <div
+                        className={cn(
+                          "line-clamp-2 text-xs break-words",
+                          !question && "text-muted-foreground",
+                        )}
+                        title={question ?? undefined}
+                      >
+                        {question ?? "Question unavailable"}
+                      </div>
                     </div>
 
                     <div className="text-muted-foreground grid gap-1 text-xs sm:grid-cols-3">

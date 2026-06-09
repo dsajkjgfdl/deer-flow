@@ -29,6 +29,8 @@ class MemoryRunStore(RunStore):
         kwargs=None,
         error=None,
         created_at=None,
+        message_count=0,
+        first_human_message=None,
     ):
         now = datetime.now(UTC).isoformat()
         self._runs[run_id] = {
@@ -44,6 +46,8 @@ class MemoryRunStore(RunStore):
             "error": error,
             "created_at": created_at or now,
             "updated_at": now,
+            "message_count": message_count,
+            "first_human_message": first_human_message,
         }
 
     async def get(self, run_id, *, user_id=None):
@@ -80,6 +84,8 @@ class MemoryRunStore(RunStore):
         if run_id in self._runs:
             self._runs[run_id]["status"] = status
             for key, value in kwargs.items():
+                if key == "first_human_message" and self._runs[run_id].get(key):
+                    continue
                 if value is not None:
                     self._runs[run_id][key] = value
             self._runs[run_id]["updated_at"] = datetime.now(UTC).isoformat()
@@ -89,6 +95,8 @@ class MemoryRunStore(RunStore):
     async def update_run_progress(self, run_id, **kwargs):
         if run_id in self._runs and self._runs[run_id].get("status") == "running":
             for key, value in kwargs.items():
+                if key == "first_human_message" and self._runs[run_id].get(key):
+                    continue
                 if value is not None:
                     self._runs[run_id][key] = value
             self._runs[run_id]["updated_at"] = datetime.now(UTC).isoformat()

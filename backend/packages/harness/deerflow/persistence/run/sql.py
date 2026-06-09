@@ -93,6 +93,8 @@ class RunRepository(RunStore):
         error=None,
         created_at=None,
         follow_up_to_run_id=None,
+        message_count: int = 0,
+        first_human_message: str | None = None,
     ):
         """Insert or update a run row.
 
@@ -114,6 +116,8 @@ class RunRepository(RunStore):
             "kwargs_json": self._safe_json(kwargs) or {},
             "error": error,
             "follow_up_to_run_id": follow_up_to_run_id,
+            "message_count": message_count,
+            "first_human_message": first_human_message[:2000] if first_human_message else None,
             "updated_at": now,
         }
         async with self._sf() as session:
@@ -254,7 +258,10 @@ class RunRepository(RunStore):
         if last_ai_message is not None:
             values["last_ai_message"] = last_ai_message[:2000]
         if first_human_message is not None:
-            values["first_human_message"] = first_human_message[:2000]
+            values["first_human_message"] = func.coalesce(
+                func.nullif(RunRow.first_human_message, ""),
+                first_human_message[:2000],
+            )
         if error is not None:
             values["error"] = error
         async with self._sf() as session:
@@ -295,7 +302,10 @@ class RunRepository(RunStore):
         if last_ai_message is not None:
             values["last_ai_message"] = last_ai_message[:2000]
         if first_human_message is not None:
-            values["first_human_message"] = first_human_message[:2000]
+            values["first_human_message"] = func.coalesce(
+                func.nullif(RunRow.first_human_message, ""),
+                first_human_message[:2000],
+            )
         async with self._sf() as session:
             await session.execute(update(RunRow).where(RunRow.run_id == run_id, RunRow.status == "running").values(**values))
             await session.commit()

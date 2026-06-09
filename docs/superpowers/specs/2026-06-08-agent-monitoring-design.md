@@ -65,7 +65,7 @@ IM 用户身份只展示渠道原始字段。例如飞书展示 `open_id/chat_id
 
 ## 页面信息架构
 
-管理监控页使用独立前端路径 `/admin/monitoring`，不挂在普通 workspace 信息架构下。页面仍复用现有管理员鉴权能力，只有管理员可见。
+管理监控页使用独立前端路径 `/admin/monitoring`。页面复用 workspace 侧栏壳层，并在管理员左侧导航中提供与“管理后台”同级的“智能体监控”入口；入口仅对管理员可见，在监控路径下保持选中。页面仍复用现有管理员鉴权能力，只有管理员可见。
 
 页面采用三段下钻：
 
@@ -120,11 +120,13 @@ IM 用户身份只展示渠道原始字段。例如飞书展示 `open_id/chat_id
 - `thread_id`
 - 对话最近消息摘要
 - run 列表，按创建时间倒序
-- 每个 run 的状态、耗时、token、工具数量、错误摘要
+- 每个 run 的用户问题摘要、状态、耗时、token、工具数量、错误摘要。用户问题优先使用可信的 `first_human_message`，并过滤内部上下文抽取 prompt；如果没有可信问题，应明确显示不可用。
 
 ### Run 时间线
 
-点击 run 后，右侧展示动作时间线。时间线以北京时间展示，格式建议为 `YYYY-MM-DD HH:mm:ss`，并在详情中保留原始 ISO 时间。
+点击 run 后，打开接近全屏的 Run inspection 弹窗。弹窗左侧展示动作时间线，右侧展示当前事件的 Inspector；两侧独立滚动，避免长时间线和 JSON 详情在主页面中互相挤压。关闭弹窗后保留已选 run 和事件，再次点击该 run 或顶部 `Inspect run` 可继续排障。导入单个 run timeline JSON 成功后也自动打开此弹窗。
+
+主页面仅保留“最近对话”和“对话详情 / run 列表”两栏。时间线以北京时间展示，格式建议为 `YYYY-MM-DD HH:mm:ss`，并在详情中保留原始 ISO 时间。
 
 动作类型包括：
 
@@ -146,7 +148,7 @@ IM 用户身份只展示渠道原始字段。例如飞书展示 `open_id/chat_id
 
 ### Inspector
 
-选中时间线动作后，Inspector 展示：
+选中弹窗左侧时间线动作后，右侧 Inspector 展示：
 
 - action kind
 - status
@@ -353,7 +355,7 @@ IM 用户身份只展示渠道原始字段。例如飞书展示 `open_id/chat_id
 - `frontend/src/core/platform-admin/monitoring/hooks.ts`
 - `frontend/src/components/platform-admin/monitoring/*`
 
-第一版即使用独立管理后台路径 `/admin/monitoring`。如果当前前端还没有独立 admin layout，可先新增最小 admin shell，但不要挂到普通 workspace 导航中。
+第一版即使用独立管理后台路径 `/admin/monitoring`。独立 admin layout 复用 workspace 侧栏壳层，并在管理员导航中提供“智能体监控”入口，以支持运维人员在管理功能之间快速切换。
 
 ## 测试计划
 

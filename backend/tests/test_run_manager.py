@@ -618,6 +618,50 @@ async def test_model_name_create_or_reject():
 
 
 @pytest.mark.anyio
+async def test_create_or_reject_persists_initial_question():
+    store = MemoryRunStore()
+    mgr = RunManager(store=store)
+
+    record = await mgr.create_or_reject(
+        "thread-1",
+        first_human_message="What is our headcount?",
+        message_count=1,
+    )
+
+    assert record.first_human_message == "What is our headcount?"
+    assert record.message_count == 1
+    stored = await store.get(record.run_id)
+    assert stored is not None
+    assert stored["first_human_message"] == "What is our headcount?"
+    assert stored["message_count"] == 1
+
+
+@pytest.mark.anyio
+async def test_run_updates_do_not_replace_initial_question():
+    store = MemoryRunStore()
+    mgr = RunManager(store=store)
+    record = await mgr.create_or_reject(
+        "thread-1",
+        first_human_message="Who has the most experience?",
+        message_count=1,
+    )
+    await mgr.set_status(record.run_id, RunStatus.running)
+
+    internal_prompt = "<role>Context Extraction Assistant</role>"
+    await mgr.update_run_progress(record.run_id, first_human_message=internal_prompt)
+    await mgr.update_run_completion(
+        record.run_id,
+        status="success",
+        first_human_message=internal_prompt,
+    )
+
+    assert record.first_human_message == "Who has the most experience?"
+    stored = await store.get(record.run_id)
+    assert stored is not None
+    assert stored["first_human_message"] == "Who has the most experience?"
+
+
+@pytest.mark.anyio
 async def test_create_or_reject_interrupt_persists_interrupted_status_to_store():
     """interrupt strategy should persist interrupted status for old runs."""
     store = MemoryRunStore()

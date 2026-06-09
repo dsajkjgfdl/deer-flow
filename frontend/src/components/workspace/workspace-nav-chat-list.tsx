@@ -1,6 +1,11 @@
 "use client";
 
-import { BotIcon, MessagesSquare, ShieldCheckIcon } from "lucide-react";
+import {
+  ActivityIcon,
+  BotIcon,
+  MessagesSquare,
+  ShieldCheckIcon,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -43,17 +48,33 @@ export function WorkspaceNavChatList() {
           </SidebarMenuButton>
         </SidebarMenuItem>
         {showPlatformAdmin && (
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              isActive={pathname.startsWith("/workspace/admin")}
-              asChild
-            >
-              <Link className="text-muted-foreground" href="/workspace/admin">
-                <ShieldCheckIcon />
-                <span>{t.sidebar.platformAdmin}</span>
-              </Link>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
+          <>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                isActive={pathname.startsWith("/workspace/admin")}
+                asChild
+              >
+                <Link className="text-muted-foreground" href="/workspace/admin">
+                  <ShieldCheckIcon />
+                  <span>{t.sidebar.platformAdmin}</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                isActive={pathname.startsWith("/admin/monitoring")}
+                asChild
+              >
+                <Link
+                  className="text-muted-foreground"
+                  href="/admin/monitoring"
+                >
+                  <ActivityIcon />
+                  <span>{t.sidebar.agentMonitoring}</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </>
         )}
       </SidebarMenu>
     </SidebarGroup>

@@ -134,6 +134,8 @@ class RunManager:
             "error": error if error is not None else record.error,
             "created_at": record.created_at,
             "model_name": record.model_name,
+            "message_count": record.message_count,
+            "first_human_message": record.first_human_message,
         }
 
     async def _call_store_with_retry(
@@ -259,23 +261,26 @@ class RunManager:
     async def update_run_completion(self, run_id: str, **kwargs) -> None:
         """Persist token usage and completion data to the backing store."""
         row_recovery_payload: dict[str, Any] | None = None
+        persisted_kwargs = dict(kwargs)
         async with self._lock:
             record = self._runs.get(run_id)
             if record is not None:
-                for key, value in kwargs.items():
+                if record.first_human_message:
+                    persisted_kwargs.pop("first_human_message", None)
+                for key, value in persisted_kwargs.items():
                     if key == "status":
                         continue
                     if hasattr(record, key) and value is not None:
                         setattr(record, key, value)
                 record.updated_at = _now_iso()
-                row_recovery_payload = self._store_put_payload(record, error=kwargs.get("error"))
+                row_recovery_payload = self._store_put_payload(record, error=persisted_kwargs.get("error"))
         if self._store is None:
             return
         try:
             updated = await self._call_store_with_retry(
                 "update_run_completion",
                 run_id,
-                lambda: self._store.update_run_completion(run_id, **kwargs),
+                lambda: self._store.update_run_completion(run_id, **persisted_kwargs),
             )
             if updated is False:
                 if row_recovery_payload is None:
@@ -286,7 +291,7 @@ class RunManager:
                 recovered = await self._call_store_with_retry(
                     "update_run_completion",
                     run_id,
-                    lambda: self._store.update_run_completion(run_id, **kwargs),
+                    lambda: self._store.update_run_completion(run_id, **persisted_kwargs),
                 )
                 if recovered is False:
                     logger.warning("Run completion update for %s affected no rows after row recreation", run_id)
@@ -296,18 +301,21 @@ class RunManager:
     async def update_run_progress(self, run_id: str, **kwargs) -> None:
         """Persist a running token/message snapshot without changing status."""
         should_persist = True
+        persisted_kwargs = dict(kwargs)
         async with self._lock:
             record = self._runs.get(run_id)
             if record is not None:
                 should_persist = record.status == RunStatus.running
             if record is not None and should_persist:
-                for key, value in kwargs.items():
+                if record.first_human_message:
+                    persisted_kwargs.pop("first_human_message", None)
+                for key, value in persisted_kwargs.items():
                     if hasattr(record, key) and value is not None:
                         setattr(record, key, value)
                 record.updated_at = _now_iso()
         if should_persist and self._store is not None:
             try:
-                await self._store.update_run_progress(run_id, **kwargs)
+                await self._store.update_run_progress(run_id, **persisted_kwargs)
             except Exception:
                 logger.warning("Failed to persist run progress for %s", run_id, exc_info=True)
 
@@ -504,6 +512,8 @@ class RunManager:
         kwargs: dict | None = None,
         multitask_strategy: str = "reject",
         model_name: str | None = None,
+        first_human_message: str | None = None,
+        message_count: int = 0,
     ) -> RunRecord:
         """Atomically check for inflight runs and create a new one.
 
@@ -549,6 +559,8 @@ class RunManager:
                 created_at=now,
                 updated_at=now,
                 model_name=model_name,
+                first_human_message=first_human_message,
+                message_count=message_count,
             )
             self._runs[run_id] = record
             persisted = False

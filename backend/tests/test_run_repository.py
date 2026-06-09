@@ -70,12 +70,20 @@ class TestRunRepository:
     @pytest.mark.anyio
     async def test_put_and_get(self, tmp_path):
         repo = await _make_repo(tmp_path)
-        await repo.put("r1", thread_id="t1", status="pending")
+        await repo.put(
+            "r1",
+            thread_id="t1",
+            status="pending",
+            message_count=1,
+            first_human_message="What is our headcount?",
+        )
         row = await repo.get("r1")
         assert row is not None
         assert row["run_id"] == "r1"
         assert row["thread_id"] == "t1"
         assert row["status"] == "pending"
+        assert row["message_count"] == 1
+        assert row["first_human_message"] == "What is our headcount?"
         await _cleanup()
 
     @pytest.mark.anyio
@@ -210,6 +218,28 @@ class TestRunRepository:
         assert row["message_count"] == 3
         assert row["last_ai_message"] == "The answer is 42"
         assert row["first_human_message"] == "What is the meaning?"
+        await _cleanup()
+
+    @pytest.mark.anyio
+    async def test_run_updates_do_not_replace_initial_question(self, tmp_path):
+        repo = await _make_repo(tmp_path)
+        await repo.put(
+            "r1",
+            thread_id="t1",
+            status="running",
+            first_human_message="Who has the most experience?",
+        )
+
+        internal_prompt = "<role>Context Extraction Assistant</role>"
+        await repo.update_run_progress("r1", first_human_message=internal_prompt)
+        await repo.update_run_completion(
+            "r1",
+            status="success",
+            first_human_message=internal_prompt,
+        )
+
+        row = await repo.get("r1")
+        assert row["first_human_message"] == "Who has the most experience?"
         await _cleanup()
 
     @pytest.mark.anyio

@@ -231,10 +231,7 @@ def _monitoring_conversation_row(
 class FakePushdownMonitoringRepo(FakeMonitoringRepo):
     def __init__(self) -> None:
         super().__init__()
-        self.rows = [
-            _monitoring_conversation_row(f"thread-web-{idx:03d}", agent_name="other-agent", status="success")
-            for idx in range(240)
-        ]
+        self.rows = [_monitoring_conversation_row(f"thread-web-{idx:03d}", agent_name="other-agent", status="success") for idx in range(240)]
         self.rows.append(
             _monitoring_conversation_row(
                 "thread-im",
@@ -458,6 +455,25 @@ class FakeSameTimestampMonitoringRepo(FakeMonitoringRepo):
                 "metadata_json": {"argument_keys": ["question"]},
             }
         ]
+
+
+class FakeNoAuditMonitoringRepo(FakeMonitoringRepo):
+    async def list_tool_audits_for_run(self, run_id: str) -> list[dict]:
+        return []
+
+
+class FakeEmptyTimelineRunEventStore(FakeRunEventStore):
+    async def list_events(self, thread_id, run_id, *, event_types=None, limit=500, user_id=None):
+        self.calls.append(
+            {
+                "thread_id": thread_id,
+                "run_id": run_id,
+                "event_types": event_types,
+                "limit": limit,
+                "user_id": user_id,
+            }
+        )
+        return []
 
 
 class FakeEmptyRunEventStore:
@@ -748,10 +764,7 @@ def test_admin_monitoring_recent_conversations_pushes_agent_status_to_repo():
     app.include_router(platform_admin.router)
 
     with TestClient(app) as client:
-        response = client.get(
-            "/api/platform/admin/monitoring/conversations/recent"
-            "?agent_name=hr-boss-agent&status=error&limit=10"
-        )
+        response = client.get("/api/platform/admin/monitoring/conversations/recent?agent_name=hr-boss-agent&status=error&limit=10")
 
     assert response.status_code == 200
     assert repo.recent_calls[-1]["agent_name"] == "hr-boss-agent"
@@ -906,6 +919,39 @@ def test_admin_monitoring_conversation_detail_returns_runs_and_identity():
     assert data["runs"][0]["updated_at_bj"] == "2026-06-08 13:39:22"
 
 
+def test_admin_monitoring_conversation_detail_recovers_question_from_run_input():
+    from app.gateway.routers import platform_admin
+
+    class CorruptedQuestionRepo(FakeMonitoringRepo):
+        def _run(self) -> dict:
+            run = super()._run()
+            run["first_human_message"] = "<role>Context Extraction Assistant</role>"
+            run["kwargs"] = {
+                "input": {
+                    "messages": [
+                        {
+                            "role": "human",
+                            "content": "Who has the most experience?",
+                        }
+                    ]
+                }
+            }
+            return run
+
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = CorruptedQuestionRepo()
+    app.state.channel_store = FakeChannelStore()
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        response = client.get("/api/platform/admin/monitoring/conversations/thread-im")
+
+    assert response.status_code == 200
+    run = response.json()["runs"][0]
+    assert run["first_human_message"] == "Who has the most experience?"
+    assert run["message_preview"] == "Who has the most experience?"
+
+
 def test_admin_monitoring_run_timeline_merges_events_and_tool_audit():
     from app.gateway.routers import platform_admin
 
@@ -960,6 +1006,32 @@ def test_admin_monitoring_run_timeline_sorts_missing_seq_after_same_time_run_eve
 
     assert response.status_code == 200
     assert [event["kind"] for event in response.json()["events"]] == ["run.start", "tool.error"]
+
+
+def test_admin_monitoring_run_timeline_falls_back_to_run_summary_when_events_missing():
+    from app.gateway.routers import platform_admin
+
+    event_store = FakeEmptyTimelineRunEventStore()
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = FakeNoAuditMonitoringRepo()
+    app.state.channel_store = FakeChannelStore()
+    app.state.run_event_store = event_store
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        response = client.get("/api/platform/admin/monitoring/runs/run-im/timeline")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [event["kind"] for event in data["events"]] == [
+        "run.start",
+        "human_message",
+        "ai_message",
+        "run.end",
+    ]
+    assert data["events"][1]["content"]["content"] == "查询研发工程师人数"
+    assert data["events"][1]["metadata"]["source"] == "run_summary"
+    assert event_store.calls[-1]["user_id"] is None
 
 
 def test_admin_monitoring_run_messages_returns_admin_messages():

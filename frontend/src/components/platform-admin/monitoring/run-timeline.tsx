@@ -1,14 +1,12 @@
 "use client";
 
-import {
-  ActivityIcon,
-  ClockIcon,
-  TimerIcon,
-  WrenchIcon,
-} from "lucide-react";
+import { ActivityIcon, ClockIcon, TimerIcon, WrenchIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import type { MonitoringRunTimeline } from "@/core/platform";
+import type {
+  MonitoringIdentity,
+  MonitoringRunTimeline,
+} from "@/core/platform";
 import { cn } from "@/lib/utils";
 
 import {
@@ -23,6 +21,8 @@ import {
 
 interface RunTimelineProps {
   timeline: MonitoringRunTimeline | null;
+  runId?: string | null;
+  identity?: MonitoringIdentity | null;
   selectedEventKey: string | null;
   onSelectEventKey: (key: string) => void;
   isLoading: boolean;
@@ -37,15 +37,19 @@ function eventTitle(title: string | null | undefined, kind: string): string {
 
 export function RunTimeline({
   timeline,
+  runId,
+  identity,
   selectedEventKey,
   onSelectEventKey,
   isLoading,
   isImported,
 }: RunTimelineProps) {
   const events = timeline?.events ?? [];
+  const displayedRunId = timeline?.run.run_id ?? runId;
+  const displayedIdentity = timeline?.identity ?? identity;
 
   return (
-    <section className="min-h-0 border-b">
+    <section className="min-h-0 border-b lg:border-r lg:border-b-0">
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
           <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -53,11 +57,11 @@ export function RunTimeline({
             <div className="min-w-0">
               <h2 className="truncate text-sm font-semibold">Run timeline</h2>
               <div className="text-muted-foreground truncate font-mono text-xs">
-                {timeline ? shortId(timeline.run.run_id) : "-"}
+                {displayedRunId ? shortId(displayedRunId) : "-"}
               </div>
-              {timeline && (
+              {displayedIdentity && (
                 <div className="text-muted-foreground truncate text-xs">
-                  {identityText(timeline.identity)}
+                  {identityText(displayedIdentity)}
                 </div>
               )}
             </div>
@@ -96,9 +100,9 @@ export function RunTimeline({
                     key={`${index}:${event.seq ?? "none"}:${event.kind}:${event.occurred_at ?? ""}`}
                     type="button"
                     className={cn(
-                      "flex w-full gap-3 rounded-md border px-3 py-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      "hover:bg-muted/40 focus-visible:ring-ring flex w-full gap-3 rounded-md border px-3 py-2 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none",
                       eventTone(event),
-                      isSelected && "ring-2 ring-ring",
+                      isSelected && "ring-ring ring-2",
                     )}
                     onClick={() => onSelectEventKey(rowKey)}
                   >

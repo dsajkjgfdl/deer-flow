@@ -353,8 +353,71 @@ def _monitoring_run_id(row: dict[str, Any]) -> str | None:
     return str(value) if value else None
 
 
+_INTERNAL_PROMPT_MARKERS = (
+    "<role>",
+    "<primary_objective>",
+    "context extraction assistant",
+    "your sole objective",
+)
+
+
+def _is_internal_prompt(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.lower()
+    return any(marker in normalized for marker in _INTERNAL_PROMPT_MARKERS)
+
+
+def _message_content_text(content: Any) -> str | None:
+    if isinstance(content, str):
+        return content.strip() or None
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                value = block.get("text") or block.get("content")
+                if isinstance(value, str):
+                    parts.append(value)
+        return "".join(parts).strip() or None
+    if isinstance(content, dict):
+        value = content.get("text") or content.get("content")
+        return value.strip() if isinstance(value, str) and value.strip() else None
+    return None
+
+
+def _question_from_run_input(row: dict[str, Any]) -> str | None:
+    kwargs = row.get("kwargs") or row.get("kwargs_json")
+    if not isinstance(kwargs, dict):
+        return None
+    graph_input = kwargs.get("input")
+    if not isinstance(graph_input, dict):
+        return None
+    messages = graph_input.get("messages")
+    if not isinstance(messages, list):
+        return None
+    for message in reversed(messages):
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role") or message.get("type")
+        if role not in {"human", "user"} or message.get("name") == "summary":
+            continue
+        text = _message_content_text(message.get("content"))
+        if text and not _is_internal_prompt(text):
+            return text[:2000]
+    return None
+
+
+def _monitoring_question(row: dict[str, Any]) -> str | None:
+    first_human_message = row.get("first_human_message")
+    if first_human_message and not _is_internal_prompt(first_human_message):
+        return str(first_human_message)
+    return _question_from_run_input(row)
+
+
 def _message_preview(row: dict[str, Any]) -> str | None:
-    value = row.get("first_human_message") or row.get("last_message") or row.get("last_ai_message")
+    value = _monitoring_question(row) or row.get("last_message") or row.get("last_ai_message")
     return str(value) if value else None
 
 
@@ -374,6 +437,9 @@ def _normalize_monitoring_run(row: dict[str, Any]) -> dict[str, Any]:
     data["updated_at"] = _iso_text(data.get("updated_at"))
     data["created_at_bj"] = _bj_text(data.get("created_at"))
     data["updated_at_bj"] = _bj_text(data.get("updated_at"))
+    question = _monitoring_question(data)
+    if question is not None:
+        data["first_human_message"] = question
     data["message_preview"] = _message_preview(data)
     data["error_summary"] = _error_summary(data)
     return data
@@ -427,11 +493,7 @@ def _source_thread_ids_for_filter(
         return None
     if source_key in {"im", "channel"}:
         return sorted(channel_entries)
-    return sorted(
-        thread_id
-        for thread_id, entry in channel_entries.items()
-        if str(entry.get("channel_name") or "").lower() == source_key
-    )
+    return sorted(thread_id for thread_id, entry in channel_entries.items() if str(entry.get("channel_name") or "").lower() == source_key)
 
 
 def _intersect_thread_ids(*thread_id_filters: list[str] | None) -> list[str] | None:
@@ -472,11 +534,7 @@ def _normalized_query(q: str | None) -> str | None:
 
 
 def _scalar_text_values(data: dict[str, Any]) -> list[str]:
-    return [
-        str(value)
-        for value in data.values()
-        if isinstance(value, str | int | float | bool)
-    ]
+    return [str(value) for value in data.values() if isinstance(value, str | int | float | bool)]
 
 
 def _contains_query(values: list[Any], query: str | None) -> bool:
@@ -782,6 +840,100 @@ def _merge_timeline_events(
     return sorted(events, key=_timeline_sort_key)
 
 
+def _summary_timeline_event(
+    run: dict[str, Any],
+    *,
+    kind: str,
+    seq: int,
+    occurred_at: Any,
+    content: dict[str, Any],
+    status: str | None = None,
+    duration_ms: int | None = None,
+) -> dict[str, Any]:
+    occurred_at_text = _iso_text(occurred_at)
+    metadata = {
+        "source": "run_summary",
+        "trace_available": False,
+    }
+    return {
+        "kind": kind,
+        "source": "run_event",
+        "thread_id": run.get("thread_id"),
+        "run_id": run.get("run_id"),
+        "category": "summary",
+        "status": status,
+        "duration_ms": duration_ms,
+        "seq": seq,
+        "occurred_at": occurred_at_text,
+        "occurred_at_bj": _bj_text(occurred_at_text),
+        "content": content,
+        "metadata": metadata,
+    }
+
+
+def _summary_timeline_events(run: dict[str, Any]) -> list[dict[str, Any]]:
+    created_at = run.get("created_at")
+    updated_at = run.get("updated_at") or created_at
+    status = str(run.get("status")) if run.get("status") is not None else None
+    events: list[dict[str, Any]] = [
+        _summary_timeline_event(
+            run,
+            kind="run.start",
+            seq=1,
+            occurred_at=created_at,
+            content={"status": status},
+            status="running",
+        )
+    ]
+
+    first_human_message = _monitoring_question(run)
+    if first_human_message:
+        events.append(
+            _summary_timeline_event(
+                run,
+                kind="human_message",
+                seq=len(events) + 1,
+                occurred_at=created_at,
+                content={"type": "human", "content": str(first_human_message)},
+            )
+        )
+
+    last_ai_message = run.get("last_ai_message")
+    if last_ai_message:
+        events.append(
+            _summary_timeline_event(
+                run,
+                kind="ai_message",
+                seq=len(events) + 1,
+                occurred_at=updated_at,
+                content={"type": "ai", "content": str(last_ai_message)},
+            )
+        )
+
+    started_at = _datetime_from_value(created_at)
+    ended_at = _datetime_from_value(updated_at)
+    duration_ms = None
+    if started_at is not None and ended_at is not None:
+        duration_ms = max(0, int((ended_at - started_at).total_seconds() * 1000))
+
+    end_content: dict[str, Any] = {"status": status}
+    error = run.get("error_summary") or run.get("error")
+    if error:
+        end_content["error"] = str(error)
+    events.append(
+        _summary_timeline_event(
+            run,
+            kind="run.end",
+            seq=len(events) + 1,
+            occurred_at=updated_at,
+            content=end_content,
+            status=status,
+            duration_ms=duration_ms,
+        )
+    )
+    return events
+
+
 @router.get("/agents/catalog", response_model=AgentCatalogResponse)
 @require_admin
 async def list_agent_catalog(request: Request) -> AgentCatalogResponse:
@@ -891,11 +1043,7 @@ async def recent_monitoring_conversations(
     if source_thread_ids == []:
         return MonitoringConversationsResponse(items=[], total=0, limit=limit, offset=offset)
 
-    tool_query_thread_ids = (
-        await _monitoring_tool_thread_ids(repo, q=q)
-        if _normalized_query(q)
-        else set()
-    )
+    tool_query_thread_ids = await _monitoring_tool_thread_ids(repo, q=q) if _normalized_query(q) else set()
     repo_kwargs = _repo_recent_kwargs(
         repo,
         limit=limit,
@@ -989,10 +1137,13 @@ async def monitoring_run_timeline(
     channel_entries = await _channel_entries_by_thread(request)
     run_events = await _list_run_events_for_admin(request, thread_id=thread_id, run_id=run_id, limit=limit)
     tool_audits = await repo.list_tool_audits_for_run(run_id)
+    events = _merge_timeline_events(run_events, tool_audits)
+    if not events:
+        events = _summary_timeline_events(normalized_run)
     return MonitoringTimelineResponse(
         run=normalized_run,
         identity=_identity_for_thread(thread_id, run.get("user_id"), channel_entries),
-        events=_merge_timeline_events(run_events, tool_audits)[:limit],
+        events=events[:limit],
     )
 
 
