@@ -57,6 +57,88 @@ async def test_get_session_reuses_existing():
 
 
 @pytest.mark.asyncio
+async def test_concurrent_get_session_for_same_key_creates_once_and_closes_once():
+    """Concurrent callers share one in-flight creation instead of leaking a loser."""
+    pool = MCPSessionPool()
+    creation_started = asyncio.Event()
+    allow_creation = asyncio.Event()
+    mock_session = AsyncMock()
+
+    class SlowCm:
+        def __init__(self):
+            self.closed = False
+
+        async def __aenter__(self):
+            creation_started.set()
+            await allow_creation.wait()
+            return mock_session
+
+        async def __aexit__(self, *args):
+            self.closed = True
+            return False
+
+    cms: list[SlowCm] = []
+
+    def make_cm(*_args, **_kwargs):
+        cm = SlowCm()
+        cms.append(cm)
+        return cm
+
+    with patch("langchain_mcp_adapters.sessions.create_session", side_effect=make_cm) as create_session:
+        first = asyncio.create_task(
+            pool.get_session("text2cypher", "shared", {"transport": "stdio", "command": "x", "args": []})
+        )
+        await creation_started.wait()
+        second = asyncio.create_task(
+            pool.get_session("text2cypher", "shared", {"transport": "stdio", "command": "x", "args": []})
+        )
+        await asyncio.sleep(0)
+        allow_creation.set()
+        first_session, second_session = await asyncio.gather(first, second)
+
+    assert first_session is mock_session
+    assert second_session is mock_session
+    assert create_session.call_count == 1
+    assert len(cms) == 1
+
+    await pool.close_all()
+
+    assert cms[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_failed_session_initialization_closes_context_and_allows_retry():
+    """A failed creator does not leak its context or poison later calls."""
+    pool = MCPSessionPool()
+    failed_session = AsyncMock()
+    failed_session.initialize.side_effect = RuntimeError("init failed")
+    healthy_session = AsyncMock()
+
+    class Cm:
+        def __init__(self, session):
+            self.session = session
+            self.closed = False
+
+        async def __aenter__(self):
+            return self.session
+
+        async def __aexit__(self, *args):
+            self.closed = True
+            return False
+
+    failed_cm = Cm(failed_session)
+    healthy_cm = Cm(healthy_session)
+
+    with patch("langchain_mcp_adapters.sessions.create_session", side_effect=[failed_cm, healthy_cm]):
+        with pytest.raises(RuntimeError, match="init failed"):
+            await pool.get_session("text2cypher", "shared", {"transport": "stdio", "command": "x", "args": []})
+        result = await pool.get_session("text2cypher", "shared", {"transport": "stdio", "command": "x", "args": []})
+
+    assert failed_cm.closed is True
+    assert result is healthy_session
+
+
+@pytest.mark.asyncio
 async def test_different_scope_creates_different_session():
     """Different scope keys get different sessions."""
     pool = MCPSessionPool()

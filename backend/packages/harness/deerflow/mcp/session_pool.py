@@ -35,6 +35,10 @@ class MCPSessionPool:
             tuple[ClientSession, asyncio.AbstractEventLoop],
         ] = OrderedDict()
         self._context_managers: dict[tuple[str, str], Any] = {}
+        self._pending_creations: dict[
+            tuple[str, str, asyncio.AbstractEventLoop],
+            asyncio.Task[ClientSession],
+        ] = {}
         # threading.Lock is not bound to any event loop, so it is safe to
         # acquire from both async paths and sync/worker-thread paths.
         self._lock = threading.Lock()
@@ -61,8 +65,36 @@ class MCPSessionPool:
         """
         key = (server_name, scope_key)
         current_loop = asyncio.get_running_loop()
+        pending_key = (server_name, scope_key, current_loop)
 
-        # Phase 1: inspect/mutate the registry under the thread lock (no awaits).
+        with self._lock:
+            existing = self._entries.get(key)
+            if existing is not None and existing[1] is current_loop:
+                self._entries.move_to_end(key)
+                return existing[0]
+
+            creation_task = self._pending_creations.get(pending_key)
+            if creation_task is None:
+                creation_task = current_loop.create_task(
+                    self._create_and_register_session(key, connection, current_loop),
+                    name=f"mcp-session-create:{server_name}/{scope_key}",
+                )
+                self._pending_creations[pending_key] = creation_task
+                creation_task.add_done_callback(
+                    lambda done, pending_key=pending_key: self._finish_pending_creation(pending_key, done)
+                )
+
+        # Shield the shared creation task so cancellation of one caller does not
+        # cancel session creation for every other waiter.
+        return await asyncio.shield(creation_task)
+
+    async def _create_and_register_session(
+        self,
+        key: tuple[str, str],
+        connection: dict[str, Any],
+        current_loop: asyncio.AbstractEventLoop,
+    ) -> ClientSession:
+        """Create and register one session for all concurrent waiters."""
         cms_to_close: list[tuple[tuple[str, str], Any]] = []
         with self._lock:
             if key in self._entries:
@@ -94,15 +126,55 @@ class MCPSessionPool:
         from langchain_mcp_adapters.sessions import create_session
 
         cm = create_session(connection)
-        session = await cm.__aenter__()
-        await session.initialize()
+        entered = False
+        try:
+            session = await cm.__aenter__()
+            entered = True
+            await session.initialize()
+        except BaseException:
+            if entered:
+                await self._close_cm(key, cm)
+            raise
 
-        # Phase 3: register the new session under the lock.
+        # Phase 3: register the new session under the lock. A different event
+        # loop may have won the same key while this session was being created;
+        # close whichever context manager is displaced so it cannot leak.
+        winner = session
+        displaced_cm = None
+        new_cm_lost = False
         with self._lock:
-            self._entries[key] = (session, current_loop)
-            self._context_managers[key] = cm
-        logger.info("Created persistent MCP session for %s/%s", server_name, scope_key)
+            existing = self._entries.get(key)
+            if existing is not None and existing[1] is current_loop:
+                winner = existing[0]
+                new_cm_lost = True
+                self._entries.move_to_end(key)
+            else:
+                if existing is not None:
+                    displaced_cm = self._context_managers.pop(key, None)
+                self._entries[key] = (session, current_loop)
+                self._context_managers[key] = cm
+
+        if new_cm_lost:
+            await self._close_cm(key, cm)
+            return winner
+        if displaced_cm is not None:
+            await self._close_cm(key, displaced_cm)
+
+        logger.info("Created persistent MCP session for %s/%s", key[0], key[1])
         return session
+
+    def _finish_pending_creation(
+        self,
+        pending_key: tuple[str, str, asyncio.AbstractEventLoop],
+        task: asyncio.Task[ClientSession],
+    ) -> None:
+        """Remove a completed singleflight task and consume orphaned errors."""
+        with self._lock:
+            if self._pending_creations.get(pending_key) is task:
+                self._pending_creations.pop(pending_key, None)
+        if task.cancelled():
+            return
+        task.exception()
 
     # ------------------------------------------------------------------
     # Cleanup helpers
