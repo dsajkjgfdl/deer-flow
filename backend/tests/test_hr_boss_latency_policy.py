@@ -193,6 +193,31 @@ def test_hr_boss_recommendation_formatter_empty_result_is_domain_neutral():
     assert answer == "当前条件下没有查到可推荐的候选人。"
 
 
+def test_hr_boss_recommendation_formatter_rejects_noncanonical_result_schema():
+    from deerflow.agents.lead_agent.agent import _format_hr_boss_recommendation_answer
+
+    answer = _format_hr_boss_recommendation_answer(
+        {
+            "status": "success",
+            "answerable": True,
+            "result_type": "recommendation",
+            "execution": {
+                "records": [
+                    {
+                        "name": "候选甲",
+                        "position_name": "销售经理",
+                        "department_name": "销售中心",
+                    }
+                ]
+            },
+        },
+        question="帮我找一个销售经理",
+    )
+
+    assert "缺少统一推荐结果字段" in answer
+    assert "首推：候选人" not in answer
+
+
 def test_hr_boss_recommendation_direct_tool_wraps_text2cypher_tool():
     from types import SimpleNamespace
 

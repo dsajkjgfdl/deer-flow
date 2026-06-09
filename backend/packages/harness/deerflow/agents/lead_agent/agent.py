@@ -531,6 +531,8 @@ def _format_hr_boss_recommendation_answer(value, *, question: str = "") -> str:
     records = execution.get("records") if isinstance(execution, dict) else None
     if not isinstance(records, list) or not records:
         return "当前条件下没有查到可推荐的候选人。"
+    if any(not isinstance(record, dict) or not str(record.get("employee_name") or "").strip() for record in records):
+        return "推荐查询结果缺少统一推荐结果字段 employee_name，无法可靠生成候选建议。"
 
     lines: list[str] = []
     lines.extend(_format_hr_boss_recommendation_record(records[0], label="首推"))
