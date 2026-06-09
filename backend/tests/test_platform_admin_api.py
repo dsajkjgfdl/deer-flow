@@ -82,6 +82,7 @@ class FakeMonitoringRepo(FakePlatformRepo):
     def __init__(self) -> None:
         super().__init__()
         self.recent_calls: list[dict] = []
+        self.tool_thread_calls: list[dict] = []
 
     def _run(self) -> dict:
         return {
@@ -147,6 +148,24 @@ class FakeMonitoringRepo(FakePlatformRepo):
                 "metadata_json": {"argument_keys": ["question"]},
             }
         ]
+
+    async def list_monitoring_tool_thread_ids(
+        self,
+        *,
+        tool_name: str | None = None,
+        mcp_server_name: str | None = None,
+        q: str | None = None,
+    ) -> list[str]:
+        self.tool_thread_calls.append(
+            {
+                "tool_name": tool_name,
+                "mcp_server_name": mcp_server_name,
+                "q": q,
+            }
+        )
+        values = "text2cypher_answer_question text2cypher timeout"
+        filters = [value.strip().lower() for value in (tool_name, mcp_server_name, q) if value and value.strip()]
+        return ["thread-im"] if all(value in values for value in filters) else []
 
 
 class FakeChannelStore:
@@ -262,6 +281,20 @@ class FakePushdownMonitoringRepo(FakeMonitoringRepo):
         if source_thread_ids is not None:
             allowed = set(source_thread_ids)
             rows = [row for row in rows if row["thread_id"] in allowed]
+        return {
+            "items": rows[offset : offset + limit],
+            "total": len(rows),
+            "limit": limit,
+            "offset": offset,
+        }
+
+
+class FakeIgnoringThreadFilterMonitoringRepo(FakePushdownMonitoringRepo):
+    async def list_recent_monitoring_conversations(self, **kwargs) -> dict:
+        self.recent_calls.append(kwargs)
+        limit = int(kwargs.get("limit", 50))
+        offset = int(kwargs.get("offset", 0))
+        rows = list(self.rows)
         return {
             "items": rows[offset : offset + limit],
             "total": len(rows),
@@ -746,6 +779,88 @@ def test_admin_monitoring_recent_conversations_pushes_channel_source_thread_ids(
     data = response.json()
     assert data["total"] == 1
     assert [item["thread_id"] for item in data["items"]] == ["thread-im"]
+
+
+def test_admin_monitoring_recent_conversations_filters_by_tool_and_mcp():
+    from app.gateway.routers import platform_admin
+
+    repo = FakeIgnoringThreadFilterMonitoringRepo()
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = repo
+    app.state.channel_store = FakeMultiChannelStore()
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        tool_response = client.get(
+            "/api/platform/admin/monitoring/conversations/recent",
+            params={"tool_name": "answer_question"},
+        )
+        mcp_response = client.get(
+            "/api/platform/admin/monitoring/conversations/recent",
+            params={"mcp_server_name": "text2cypher"},
+        )
+        combined_response = client.get(
+            "/api/platform/admin/monitoring/conversations/recent",
+            params={"source": "feishu", "tool_name": "text2cypher"},
+        )
+
+    assert tool_response.status_code == 200
+    assert [item["thread_id"] for item in tool_response.json()["items"]] == ["thread-im"]
+    assert mcp_response.status_code == 200
+    assert [item["thread_id"] for item in mcp_response.json()["items"]] == ["thread-im"]
+    assert combined_response.status_code == 200
+    assert [item["thread_id"] for item in combined_response.json()["items"]] == ["thread-im"]
+    assert repo.recent_calls[-1]["source_thread_ids"] == ["thread-im"]
+
+
+def test_admin_monitoring_recent_conversations_q_matches_tool_audit():
+    from app.gateway.routers import platform_admin
+
+    repo = FakePushdownMonitoringRepo()
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = repo
+    app.state.channel_store = FakeMultiChannelStore()
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/platform/admin/monitoring/conversations/recent",
+            params={"q": "answer_question"},
+        )
+
+    assert response.status_code == 200
+    assert [item["thread_id"] for item in response.json()["items"]] == ["thread-im"]
+    assert all(call.get("q") is None for call in repo.recent_calls)
+
+
+def test_admin_monitoring_recent_conversations_filters_beijing_time_range():
+    from app.gateway.routers import platform_admin
+
+    repo = FakeMonitoringRepo()
+    app = make_authed_test_app(user_factory=lambda: _user("admin"))
+    app.state.platform_repo = repo
+    app.state.channel_store = FakeChannelStore()
+    app.include_router(platform_admin.router)
+
+    with TestClient(app) as client:
+        included = client.get(
+            "/api/platform/admin/monitoring/conversations/recent",
+            params={"from": "2026-06-08T13:39:21", "to": "2026-06-08T13:39:23"},
+        )
+        excluded = client.get(
+            "/api/platform/admin/monitoring/conversations/recent",
+            params={"to": "2026-06-08T13:39:21"},
+        )
+        invalid = client.get(
+            "/api/platform/admin/monitoring/conversations/recent",
+            params={"from": "2026-06-08T14:00", "to": "2026-06-08T13:00"},
+        )
+
+    assert included.status_code == 200
+    assert [item["thread_id"] for item in included.json()["items"]] == ["thread-im"]
+    assert excluded.status_code == 200
+    assert excluded.json()["items"] == []
+    assert invalid.status_code == 422
 
 
 def test_admin_monitoring_recent_conversations_web_source_scans_pages():

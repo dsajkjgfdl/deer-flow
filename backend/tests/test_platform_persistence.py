@@ -236,6 +236,10 @@ async def test_monitoring_run_detail_and_tool_audit_lookup(tmp_path):
         run = await repo.get_run_for_admin("run-1")
         runs = await repo.list_runs_for_thread("thread-1")
         audits = await repo.list_tool_audits_for_run("run-1")
+        tool_threads = await repo.list_monitoring_tool_thread_ids(tool_name="answer_question")
+        mcp_threads = await repo.list_monitoring_tool_thread_ids(mcp_server_name="text2cypher")
+        query_threads = await repo.list_monitoring_tool_thread_ids(q="timeout")
+        missing_threads = await repo.list_monitoring_tool_thread_ids(tool_name="missing")
 
         assert run is not None
         assert run["run_id"] == "run-1"
@@ -245,5 +249,9 @@ async def test_monitoring_run_detail_and_tool_audit_lookup(tmp_path):
             "text2cypher_answer_question",
         ]
         assert audits[1]["metadata_json"] == {"argument_keys": ["question"]}
+        assert tool_threads == ["thread-1"]
+        assert mcp_threads == ["thread-1"]
+        assert query_threads == ["thread-1"]
+        assert missing_threads == []
     finally:
         await engine.dispose()

@@ -26,7 +26,11 @@ export interface MonitoringConversationFilters {
   source?: string;
   agent_name?: string;
   status?: string;
+  tool_name?: string;
+  mcp_server_name?: string;
   q?: string;
+  from?: string;
+  to?: string;
 }
 
 async function readJsonOrThrow<T>(res: Response, fallback: string): Promise<T> {

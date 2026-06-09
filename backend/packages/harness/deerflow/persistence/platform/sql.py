@@ -328,3 +328,37 @@ class PlatformRepository:
         async with self._sf() as session:
             rows = (await session.execute(stmt)).scalars()
             return [self._row_to_dict(row) for row in rows]
+
+    async def list_monitoring_tool_thread_ids(
+        self,
+        *,
+        tool_name: str | None = None,
+        mcp_server_name: str | None = None,
+        q: str | None = None,
+        limit: int = 5000,
+    ) -> list[str]:
+        filters = [ToolAuditLogRow.thread_id.is_not(None)]
+        if tool_name and tool_name.strip():
+            filters.append(ToolAuditLogRow.tool_name.ilike(f"%{tool_name.strip()}%"))
+        if mcp_server_name and mcp_server_name.strip():
+            filters.append(ToolAuditLogRow.mcp_server_name.ilike(f"%{mcp_server_name.strip()}%"))
+        if q and q.strip():
+            pattern = f"%{q.strip()}%"
+            filters.append(
+                or_(
+                    ToolAuditLogRow.tool_name.ilike(pattern),
+                    ToolAuditLogRow.mcp_server_name.ilike(pattern),
+                    ToolAuditLogRow.error.ilike(pattern),
+                )
+            )
+
+        stmt = (
+            select(ToolAuditLogRow.thread_id)
+            .where(*filters)
+            .distinct()
+            .order_by(ToolAuditLogRow.thread_id)
+            .limit(max(0, min(limit, 10_000)))
+        )
+        async with self._sf() as session:
+            thread_ids = (await session.execute(stmt)).scalars()
+            return [str(thread_id) for thread_id in thread_ids if thread_id]

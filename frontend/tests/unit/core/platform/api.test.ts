@@ -291,18 +291,26 @@ test("fetchRecentMonitoringConversations serializes non-empty optional filters",
     limit: 25,
     offset: 5,
     source: "feishu",
-    agent_name: "",
+    agent_name: "hr-boss-agent",
     status: "error",
+    tool_name: "answer_question",
+    mcp_server_name: "text2cypher",
     q: "研发",
+    from: "2026-06-08T13:00",
+    to: "2026-06-08T14:00",
   });
 
   const requestedUrl = fetchWithAuth.mock.calls[0]?.[0] as string;
   expect(requestedUrl).toContain("limit=25");
   expect(requestedUrl).toContain("offset=5");
   expect(requestedUrl).toContain("source=feishu");
+  expect(requestedUrl).toContain("agent_name=hr-boss-agent");
   expect(requestedUrl).toContain("status=error");
+  expect(requestedUrl).toContain("tool_name=answer_question");
+  expect(requestedUrl).toContain("mcp_server_name=text2cypher");
   expect(requestedUrl).toContain("q=%E7%A0%94%E5%8F%91");
-  expect(requestedUrl).not.toContain("agent_name=");
+  expect(requestedUrl).toContain("from=2026-06-08T13%3A00");
+  expect(requestedUrl).toContain("to=2026-06-08T14%3A00");
 });
 
 test("fetchMonitoringConversation requests one monitoring conversation", async () => {

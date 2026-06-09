@@ -70,6 +70,10 @@ export function AgentMonitoringPage() {
     source: "",
     status: "",
     agent_name: "",
+    tool_name: "",
+    mcp_server_name: "",
+    from: "",
+    to: "",
   });
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -205,6 +209,66 @@ export function AgentMonitoringPage() {
               }
             />
           </div>
+
+          <Input
+            aria-label="Agent"
+            className="w-[150px]"
+            placeholder="Agent"
+            value={filters.agent_name}
+            onChange={(event) =>
+              updateFilters({
+                agent_name: event.target.value,
+              })
+            }
+          />
+
+          <Input
+            aria-label="Tool"
+            className="w-[150px]"
+            placeholder="Tool"
+            value={filters.tool_name}
+            onChange={(event) =>
+              updateFilters({
+                tool_name: event.target.value,
+              })
+            }
+          />
+
+          <Input
+            aria-label="MCP"
+            className="w-[150px]"
+            placeholder="MCP"
+            value={filters.mcp_server_name}
+            onChange={(event) =>
+              updateFilters({
+                mcp_server_name: event.target.value,
+              })
+            }
+          />
+
+          <Input
+            aria-label="From"
+            className="w-[190px]"
+            type="datetime-local"
+            value={filters.from}
+            onChange={(event) =>
+              updateFilters({
+                from: event.target.value,
+              })
+            }
+          />
+
+          <Input
+            aria-label="To"
+            className="w-[190px]"
+            type="datetime-local"
+            value={filters.to}
+            onChange={(event) =>
+              updateFilters({
+                to: event.target.value,
+              })
+            }
+          />
 
           <Select
             value={filters.source || "all"}

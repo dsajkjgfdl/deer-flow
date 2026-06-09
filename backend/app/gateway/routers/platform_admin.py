@@ -160,6 +160,21 @@ def _datetime_from_value(value: Any) -> datetime | None:
     return dt
 
 
+def _monitoring_filter_datetime(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid monitoring time: {value}") from None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_BJ_TZ)
+    return dt.astimezone(UTC)
+
+
 def _iso_text(value: Any) -> str | None:
     if value is None:
         return None
@@ -419,6 +434,36 @@ def _source_thread_ids_for_filter(
     )
 
 
+def _intersect_thread_ids(*thread_id_filters: list[str] | None) -> list[str] | None:
+    constrained = [set(thread_ids) for thread_ids in thread_id_filters if thread_ids is not None]
+    if not constrained:
+        return None
+    result = constrained[0]
+    for thread_ids in constrained[1:]:
+        result &= thread_ids
+    return sorted(result)
+
+
+async def _monitoring_tool_thread_ids(
+    repo: Any,
+    *,
+    tool_name: str | None = None,
+    mcp_server_name: str | None = None,
+    q: str | None = None,
+) -> set[str]:
+    method = getattr(repo, "list_monitoring_tool_thread_ids", None)
+    if method is None:
+        return set()
+    result = await _maybe_await(
+        method(
+            tool_name=tool_name,
+            mcp_server_name=mcp_server_name,
+            q=q,
+        )
+    )
+    return {str(thread_id) for thread_id in result or [] if thread_id}
+
+
 def _normalized_query(q: str | None) -> str | None:
     if q is None:
         return None
@@ -445,6 +490,7 @@ def _conversation_matches_query(
     *,
     query: str | None,
     channel_entries: dict[str, dict[str, Any]],
+    tool_query_thread_ids: set[str],
 ) -> bool:
     if query is None:
         return True
@@ -465,7 +511,23 @@ def _conversation_matches_query(
     ]
     thread_id = str(row.get("thread_id") or "")
     channel_values = _scalar_text_values(channel_entries.get(thread_id, {}))
-    return _contains_query(row_values + channel_values, query)
+    return thread_id in tool_query_thread_ids or _contains_query(row_values + channel_values, query)
+
+
+def _conversation_matches_time_range(
+    row: dict[str, Any],
+    *,
+    from_time: datetime | None,
+    to_time: datetime | None,
+) -> bool:
+    occurred_at = _datetime_from_value(row.get("updated_at") or row.get("created_at"))
+    if occurred_at is None:
+        return from_time is None and to_time is None
+    if from_time is not None and occurred_at < from_time:
+        return False
+    if to_time is not None and occurred_at > to_time:
+        return False
+    return True
 
 
 def _conversation_matches_filters(
@@ -476,15 +538,28 @@ def _conversation_matches_filters(
     status: str | None,
     q: str | None,
     channel_entries: dict[str, dict[str, Any]],
+    tool_query_thread_ids: set[str],
+    allowed_thread_ids: set[str] | None,
+    from_time: datetime | None,
+    to_time: datetime | None,
 ) -> bool:
     thread_id = str(row.get("thread_id") or "")
+    if allowed_thread_ids is not None and thread_id not in allowed_thread_ids:
+        return False
     if not _source_matches(source, thread_id, channel_entries):
         return False
     if agent_name and row.get("agent_name") != agent_name:
         return False
     if status and row.get("status") != status:
         return False
-    if not _conversation_matches_query(row, query=_normalized_query(q), channel_entries=channel_entries):
+    if not _conversation_matches_query(
+        row,
+        query=_normalized_query(q),
+        channel_entries=channel_entries,
+        tool_query_thread_ids=tool_query_thread_ids,
+    ):
+        return False
+    if not _conversation_matches_time_range(row, from_time=from_time, to_time=to_time):
         return False
     return True
 
@@ -557,16 +632,20 @@ def _needs_local_recent_filter(
     repo_kwargs: dict[str, Any],
     *,
     source: str | None,
+    source_thread_ids: list[str] | None,
     agent_name: str | None,
     status: str | None,
     q: str | None,
+    from_time: datetime | None,
+    to_time: datetime | None,
+    thread_filter_required: bool,
 ) -> bool:
-    if _normalized_query(q):
+    if thread_filter_required or _normalized_query(q) or from_time is not None or to_time is not None:
         return True
     source_key = source.strip().lower() if source else ""
     if source_key == "web":
         return True
-    if source_key and "source_thread_ids" not in repo_kwargs:
+    if source_thread_ids is not None and "source_thread_ids" not in repo_kwargs:
         return True
     if agent_name and "agent_name" not in repo_kwargs:
         return True
@@ -584,6 +663,10 @@ async def _scan_recent_conversations(
     source_thread_ids: list[str] | None,
     source: str | None,
     channel_entries: dict[str, dict[str, Any]],
+    tool_query_thread_ids: set[str],
+    allowed_thread_ids: set[str] | None,
+    from_time: datetime | None,
+    to_time: datetime | None,
     limit: int,
     offset: int,
 ) -> tuple[list[dict[str, Any]], int]:
@@ -611,6 +694,10 @@ async def _scan_recent_conversations(
                 status=status,
                 q=q,
                 channel_entries=channel_entries,
+                tool_query_thread_ids=tool_query_thread_ids,
+                allowed_thread_ids=allowed_thread_ids,
+                from_time=from_time,
+                to_time=to_time,
             ):
                 continue
             if matched_total >= offset and len(collected) < limit:
@@ -771,11 +858,44 @@ async def recent_monitoring_conversations(
     source: str | None = Query(default=None),
     agent_name: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    tool_name: str | None = Query(default=None),
+    mcp_server_name: str | None = Query(default=None),
     q: str | None = Query(default=None),
+    from_time_text: str | None = Query(default=None, alias="from"),
+    to_time_text: str | None = Query(default=None, alias="to"),
 ) -> MonitoringConversationsResponse:
     repo = _platform_repo(request)
     channel_entries = await _channel_entries_by_thread(request)
+    from_time = _monitoring_filter_datetime(from_time_text)
+    to_time = _monitoring_filter_datetime(to_time_text)
+    if from_time is not None and to_time is not None and from_time > to_time:
+        raise HTTPException(status_code=422, detail="Monitoring 'from' time must not be after 'to' time")
+
     source_thread_ids = _source_thread_ids_for_filter(source, channel_entries)
+    tool_filter_requested = bool((tool_name and tool_name.strip()) or (mcp_server_name and mcp_server_name.strip()))
+    tool_filter_thread_ids = (
+        await _monitoring_tool_thread_ids(
+            repo,
+            tool_name=tool_name,
+            mcp_server_name=mcp_server_name,
+        )
+        if tool_filter_requested
+        else None
+    )
+    if tool_filter_requested and not tool_filter_thread_ids:
+        return MonitoringConversationsResponse(items=[], total=0, limit=limit, offset=offset)
+    source_thread_ids = _intersect_thread_ids(
+        source_thread_ids,
+        sorted(tool_filter_thread_ids) if tool_filter_thread_ids is not None else None,
+    )
+    if source_thread_ids == []:
+        return MonitoringConversationsResponse(items=[], total=0, limit=limit, offset=offset)
+
+    tool_query_thread_ids = (
+        await _monitoring_tool_thread_ids(repo, q=q)
+        if _normalized_query(q)
+        else set()
+    )
     repo_kwargs = _repo_recent_kwargs(
         repo,
         limit=limit,
@@ -788,9 +908,13 @@ async def recent_monitoring_conversations(
     if _needs_local_recent_filter(
         repo_kwargs,
         source=source,
+        source_thread_ids=source_thread_ids,
         agent_name=agent_name,
         status=status,
         q=q,
+        from_time=from_time,
+        to_time=to_time,
+        thread_filter_required=tool_filter_requested,
     ):
         rows, total = await _scan_recent_conversations(
             repo,
@@ -800,6 +924,10 @@ async def recent_monitoring_conversations(
             source_thread_ids=source_thread_ids,
             source=source,
             channel_entries=channel_entries,
+            tool_query_thread_ids=tool_query_thread_ids,
+            allowed_thread_ids=set(source_thread_ids) if source_thread_ids is not None else None,
+            from_time=from_time,
+            to_time=to_time,
             limit=limit,
             offset=offset,
         )
