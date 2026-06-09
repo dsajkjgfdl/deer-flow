@@ -1,5 +1,6 @@
 """Tests for the MCP persistent-session pool."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -293,6 +294,98 @@ async def test_session_pool_tool_extracts_thread_id():
     # Verify the session was created with the correct scope key.
     pool = get_session_pool()
     assert ("server", "from-config") in pool._entries
+
+
+@pytest.mark.asyncio
+async def test_session_pool_tool_uses_shared_scope_for_hr_query_servers():
+    """Stateless HR MCP servers should not pay a new session startup per thread."""
+    from langchain_core.tools import StructuredTool
+    from pydantic import BaseModel, Field
+
+    from deerflow.mcp.tools import _make_session_pool_tool
+
+    class Args(BaseModel):
+        question: str = Field(..., description="question")
+
+    original_tool = StructuredTool(
+        name="text2cypher_answer_question",
+        description="Answer HR question.",
+        args_schema=Args,
+        coroutine=AsyncMock(),
+        response_format="content_and_artifact",
+    )
+
+    mock_session = AsyncMock()
+    mock_session.call_tool = AsyncMock(return_value=MagicMock(content=[], isError=False, structuredContent=None))
+    mock_cm = MagicMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_cm.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("langchain_mcp_adapters.sessions.create_session", return_value=mock_cm):
+        wrapped = _make_session_pool_tool(original_tool, "text2cypher", {"transport": "stdio", "command": "x", "args": []})
+
+        runtime_a = MagicMock()
+        runtime_a.context = {"thread_id": "thread-a"}
+        runtime_a.config = {}
+        runtime_b = MagicMock()
+        runtime_b.context = {"thread_id": "thread-b"}
+        runtime_b.config = {}
+
+        await wrapped.coroutine(runtime=runtime_a, question="q1")
+        await wrapped.coroutine(runtime=runtime_b, question="q2")
+
+    pool = get_session_pool()
+    assert ("text2cypher", "shared") in pool._entries
+    assert ("text2cypher", "thread-a") not in pool._entries
+    assert ("text2cypher", "thread-b") not in pool._entries
+    assert mock_cm.__aenter__.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_prewarm_shared_mcp_sessions_prioritizes_text2cypher(monkeypatch):
+    from deerflow.mcp import tools as mcp_tools
+
+    calls: list[tuple[str, str, dict]] = []
+
+    class Pool:
+        async def get_session(self, server_name, scope_key, connection):
+            calls.append((server_name, scope_key, connection))
+
+    monkeypatch.setattr(mcp_tools, "get_session_pool", lambda: Pool())
+
+    await mcp_tools._prewarm_shared_mcp_sessions(
+        {
+            "hr-graphrag-qa": {"transport": "stdio", "command": "graphrag"},
+            "text2cypher": {"transport": "stdio", "command": "text2cypher"},
+            "playwright": {"transport": "stdio", "command": "playwright"},
+        }
+    )
+
+    assert calls == [
+        ("text2cypher", "shared", {"transport": "stdio", "command": "text2cypher"}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_prewarm_shared_mcp_session_does_not_cancel_slow_stdio_startup(monkeypatch):
+    from deerflow.mcp import tools as mcp_tools
+
+    completed = False
+
+    class Pool:
+        async def get_session(self, _server_name, _scope_key, _connection):
+            nonlocal completed
+            await asyncio.sleep(0.05)
+            completed = True
+
+    monkeypatch.setattr(mcp_tools, "get_session_pool", lambda: Pool())
+    monkeypatch.setattr(mcp_tools, "_SHARED_SESSION_PREWARM_TIMEOUT_SECONDS", 0.01, raising=False)
+
+    await mcp_tools._prewarm_shared_mcp_sessions(
+        {"text2cypher": {"transport": "stdio", "command": "text2cypher"}}
+    )
+
+    assert completed is True
 
 
 @pytest.mark.asyncio

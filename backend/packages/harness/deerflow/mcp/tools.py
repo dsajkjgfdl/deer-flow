@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Mapping
@@ -22,45 +23,110 @@ from deerflow.tools.types import Runtime
 
 logger = logging.getLogger(__name__)
 _MAX_AUDIT_ERROR_LENGTH = 500
+_SHARED_MCP_SESSION_SCOPE = "shared"
+_SHARED_SESSION_MCP_SERVERS: frozenset[str] = frozenset({"text2cypher", "hr-graphrag-qa"})
+_PREWARM_SHARED_MCP_SESSION_SERVERS: tuple[str, ...] = ("text2cypher",)
+_BACKGROUND_PREWARM_TASKS: set[asyncio.Task] = set()
 
 
-def _extract_thread_id(runtime: Runtime | None) -> str:
-    """Extract thread_id from the injected tool runtime or LangGraph config."""
-    if runtime is not None:
-        tid = runtime.context.get("thread_id") if runtime.context else None
-        if tid is not None:
-            return str(tid)
-        config = runtime.config or {}
-        tid = config.get("configurable", {}).get("thread_id")
-        if tid is not None:
-            return str(tid)
-
-    try:
-        tid = get_config().get("configurable", {}).get("thread_id")
-        return str(tid) if tid is not None else "default"
-    except RuntimeError:
-        return "default"
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
 
 
 def _runtime_context(runtime: Runtime | None) -> Mapping[str, Any]:
     context = getattr(runtime, "context", None)
-    return context if isinstance(context, Mapping) else {}
+    return _as_mapping(context)
+
+
+def _runtime_config(runtime: Runtime | None) -> Mapping[str, Any]:
+    return _as_mapping(getattr(runtime, "config", None))
+
+
+def _config_context(config: Mapping[str, Any]) -> Mapping[str, Any]:
+    return _as_mapping(config.get("context"))
 
 
 def _runtime_configurable(runtime: Runtime | None) -> Mapping[str, Any]:
-    config = getattr(runtime, "config", None)
-    if not isinstance(config, Mapping):
-        return {}
+    config = _runtime_config(runtime)
+    return _config_configurable(config)
+
+
+def _config_configurable(config: Mapping[str, Any]) -> Mapping[str, Any]:
     configurable = config.get("configurable")
-    return configurable if isinstance(configurable, Mapping) else {}
+    return _as_mapping(configurable)
+
+
+def _current_langgraph_config() -> Mapping[str, Any]:
+    try:
+        return _as_mapping(get_config())
+    except RuntimeError:
+        return {}
 
 
 def _runtime_value(runtime: Runtime | None, key: str) -> Any:
-    context = _runtime_context(runtime)
-    if key in context:
-        return context[key]
-    configurable = _runtime_configurable(runtime)
-    return configurable.get(key)
+    runtime_config = _runtime_config(runtime)
+    current_config = _current_langgraph_config()
+
+    for source in (
+        _runtime_context(runtime),
+        _config_context(runtime_config),
+        _config_configurable(runtime_config),
+        _config_context(current_config),
+        _config_configurable(current_config),
+    ):
+        if key in source:
+            return source[key]
+    return None
+
+
+def _extract_thread_id(runtime: Runtime | None) -> str:
+    """Extract thread_id from the injected tool runtime or LangGraph config."""
+    tid = _runtime_value(runtime, "thread_id")
+    return str(tid) if tid is not None else "default"
+
+
+def _session_scope_key(server_name: str, runtime: Runtime | None) -> str:
+    if server_name in _SHARED_SESSION_MCP_SERVERS:
+        return _SHARED_MCP_SESSION_SCOPE
+    return _extract_thread_id(runtime)
+
+
+async def _prewarm_shared_mcp_sessions(servers_config: Mapping[str, dict[str, Any]]) -> None:
+    pool = get_session_pool()
+    for server_name in _PREWARM_SHARED_MCP_SESSION_SERVERS:
+        connection = servers_config.get(server_name)
+        if connection is None:
+            continue
+        try:
+            await pool.get_session(server_name, _SHARED_MCP_SESSION_SCOPE, connection)
+        except Exception:
+            logger.warning("Failed to prewarm shared MCP session for %s", server_name, exc_info=True)
+
+
+def _schedule_shared_mcp_sessions_prewarm(servers_config: Mapping[str, dict[str, Any]]) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    if not loop.is_running():
+        return
+
+    task = loop.create_task(
+        _prewarm_shared_mcp_sessions(servers_config),
+        name="shared-mcp-session-prewarm",
+    )
+    _BACKGROUND_PREWARM_TASKS.add(task)
+
+    def _log_failure(done: asyncio.Task) -> None:
+        _BACKGROUND_PREWARM_TASKS.discard(done)
+        if done.cancelled():
+            return
+        try:
+            done.result()
+        except Exception:
+            logger.warning("Shared MCP session prewarm failed", exc_info=True)
+
+    task.add_done_callback(_log_failure)
 
 
 def _truncate_audit_error(error: str | None) -> str | None:
@@ -236,8 +302,8 @@ def _make_session_pool_tool(
                     await session.initialize()
                     return await call_with_session(session)
 
-            thread_id = _extract_thread_id(runtime)
-            session = await pool.get_session(server_name, thread_id, connection)
+            scope_key = _session_scope_key(server_name, runtime)
+            session = await pool.get_session(server_name, scope_key, connection)
             return await call_with_session(session)
         except Exception as exc:
             status = "error"
@@ -366,6 +432,8 @@ async def get_mcp_tools() -> list[BaseTool]:
         for tool in wrapped_tools:
             if getattr(tool, "func", None) is None and getattr(tool, "coroutine", None) is not None:
                 tool.func = make_sync_tool_wrapper(tool.coroutine, tool.name)
+
+        _schedule_shared_mcp_sessions_prewarm(servers_config)
 
         return wrapped_tools
 

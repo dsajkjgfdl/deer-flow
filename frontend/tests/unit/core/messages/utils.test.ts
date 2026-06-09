@@ -79,6 +79,45 @@ test("aggregates token usage messages once per assistant turn", () => {
   ).toEqual([null, null, ["ai-1", "ai-2"], null, ["ai-3"]]);
 });
 
+test("surfaces display-as-assistant tool messages as assistant bubbles", () => {
+  const messages = [
+    {
+      id: "human-1",
+      type: "human",
+      content: "Recommend someone",
+    },
+    {
+      id: "ai-1",
+      type: "ai",
+      content: "",
+      tool_calls: [
+        { id: "tool-1", name: "text2cypher_answer_question", args: {} },
+      ],
+    },
+    {
+      id: "tool-1-result",
+      type: "tool",
+      name: "text2cypher_answer_question",
+      tool_call_id: "tool-1",
+      content: "首推：候选人A",
+      additional_kwargs: { display_as_assistant: true },
+    },
+  ] as Message[];
+
+  const groups = getMessageGroups(messages);
+
+  expect(groups.map((group) => group.type)).toEqual([
+    "human",
+    "assistant:processing",
+    "assistant",
+  ]);
+  expect(groups[1]?.messages.map((message) => message.id)).toEqual([
+    "ai-1",
+    "tool-1-result",
+  ]);
+  expect(groups[2]?.messages[0]?.content).toBe("首推：候选人A");
+});
+
 describe("inline <think> tag splitting", () => {
   test("strips a fully closed <think> block from AI content", () => {
     const message = aiMessage("<think>internal reasoning</think>final answer");

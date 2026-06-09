@@ -58,7 +58,10 @@
         "TEXT2CYPHER_NEO4J_DATABASE": "neo4j",
         "TEXT2CYPHER_OPENAI_API_KEY": "$TEXT2CYPHER_OPENAI_API_KEY",
         "TEXT2CYPHER_OPENAI_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "TEXT2CYPHER_OPENAI_MODEL": "qwen3-max"
+        "TEXT2CYPHER_OPENAI_MODEL": "qwen3-max",
+        "TEXT2CYPHER_OPENAI_TIMEOUT_SECONDS": "18",
+        "TEXT2CYPHER_OPENAI_MAX_RETRIES": "0",
+        "TEXT2CYPHER_ANSWER_TIMEOUT_SECONDS": "30"
       },
       "description": "Local Text2Cypher engine via MCP"
     }

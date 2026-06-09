@@ -82,8 +82,10 @@ async def initialize_mcp_tools() -> list[BaseTool]:
 def get_cached_mcp_tools() -> list[BaseTool]:
     """Get cached MCP tools with lazy initialization.
 
-    If tools are not initialized, automatically initializes them.
-    This ensures MCP tools work in both FastAPI and LangGraph Studio contexts.
+    If tools are not initialized in a synchronous context, initialize them
+    before returning. A synchronous caller running on an active event loop
+    must fail fast instead of blocking that loop while async initialization
+    tries to make progress.
 
     Also checks if the config file has been modified since last initialization,
     and re-initializes if needed. This ensures that changes made through the
@@ -103,29 +105,18 @@ def get_cached_mcp_tools() -> list[BaseTool]:
     if not _cache_initialized:
         logger.info("MCP tools not initialized, performing lazy initialization...")
         try:
-            # Try to initialize in the current event loop
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If loop is already running (e.g., in LangGraph Studio),
-                # we need to create a new loop in a thread
-                import concurrent.futures
-
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, initialize_mcp_tools())
-                    future.result()
-            else:
-                # If no loop is running, we can use the current loop
-                loop.run_until_complete(initialize_mcp_tools())
+            asyncio.get_running_loop()
         except RuntimeError:
-            # No event loop exists, create one
             try:
                 asyncio.run(initialize_mcp_tools())
             except Exception:
                 logger.exception("Failed to lazy-initialize MCP tools")
                 return []
-        except Exception:
-            logger.exception("Failed to lazy-initialize MCP tools")
-            return []
+        else:
+            raise RuntimeError(
+                "MCP tools are not initialized. Await initialize_mcp_tools() "
+                "before reading the synchronous MCP tool cache."
+            )
 
     return _mcp_tools_cache or []
 

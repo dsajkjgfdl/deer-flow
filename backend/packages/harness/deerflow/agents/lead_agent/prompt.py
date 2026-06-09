@@ -539,8 +539,7 @@ combined with a FastAPI gateway for REST API access [citation:FastAPI](https://f
 
 <critical_reminders>
 - **Clarification First**: ALWAYS clarify unclear/missing/ambiguous requirements BEFORE starting work - never assume or guess
-{subagent_reminder}- Skill First: Always load the relevant skill before starting **complex** tasks.
-- Progressive Loading: Load resources incrementally as referenced in skills
+{subagent_reminder}{skill_loading_reminder}{progressive_loading_reminder}
 - Output Files: Final deliverables must be in `/mnt/user-data/outputs`
 - Clarity: Be direct and helpful, avoid unnecessary meta-commentary
 - Including Images and Mermaid: Images and Mermaid diagrams are always welcomed in the Markdown format, and you're encouraged to use `![Image Description](image_path)\n\n` or "```mermaid" to display images in response or Markdown files
@@ -654,6 +653,49 @@ def get_skills_prompt_section(available_skills: set[str] | None = None, *, app_c
         return ""
     skill_evolution_section = _build_skill_evolution_section(skill_evolution_enabled)
     return _get_cached_skills_prompt_section(skill_signature, available_key, container_base_path, skill_evolution_section)
+
+
+def _extract_markdown_section(text: str, heading: str) -> str:
+    lines = text.splitlines()
+    start = next((idx for idx, line in enumerate(lines) if line.strip() == heading), None)
+    if start is None:
+        return ""
+
+    end = len(lines)
+    for idx in range(start + 1, len(lines)):
+        line = lines[idx].strip()
+        if line.startswith("## "):
+            end = idx
+            break
+    return "\n".join(lines[start:end]).strip()
+
+
+def _get_hr_boss_recommendation_fast_path_skill_section(*, app_config: AppConfig | None = None) -> str:
+    try:
+        skills = get_enabled_skills_for_config(app_config)
+        skill = next((item for item in skills if item.name == "hr-boss"), None)
+        if skill is None:
+            return ""
+        content = skill.skill_file.read_text(encoding="utf-8")
+        return _extract_markdown_section(content, "## 人岗匹配与推荐快路径")
+    except Exception:
+        logger.exception("Failed to load hr-boss recommendation fast-path skill section")
+        return ""
+
+
+def get_hr_boss_recommendation_fast_path_prompt_section(*, app_config: AppConfig | None = None) -> str:
+    section = _get_hr_boss_recommendation_fast_path_skill_section(app_config=app_config)
+    if not section:
+        section = (
+            "## 人岗匹配与推荐快路径\n"
+            "首轮直接调用 `text2cypher_answer_question`，不要调用 GraphRAG 或 `read_file`。"
+        )
+
+    return f"""<hr_boss_recommendation_fast_path>
+The relevant hr-boss skill rules are already loaded from SKILL.md for this run. Do not call `read_file` for the hr-boss skill.
+
+{section}
+</hr_boss_recommendation_fast_path>"""
 
 
 def get_agent_soul(agent_name: str | None) -> str:
@@ -772,6 +814,7 @@ def apply_prompt_template(
     agent_name: str | None = None,
     available_skills: set[str] | None = None,
     app_config: AppConfig | None = None,
+    hr_boss_recommendation_fast_path: bool = False,
 ) -> str:
     # Include subagent section only if enabled (from runtime parameter)
     n = max_concurrent_subagents
@@ -795,8 +838,14 @@ def apply_prompt_template(
         else ""
     )
 
-    # Get skills section
-    skills_section = get_skills_prompt_section(available_skills, app_config=app_config)
+    if hr_boss_recommendation_fast_path:
+        skills_section = get_hr_boss_recommendation_fast_path_prompt_section(app_config=app_config)
+        skill_loading_reminder = "- HR Boss fast path: the relevant hr-boss skill rules are already loaded below. Do not call `read_file` for the hr-boss skill.\n"
+        progressive_loading_reminder = ""
+    else:
+        skills_section = get_skills_prompt_section(available_skills, app_config=app_config)
+        skill_loading_reminder = "- Skill First: Always load the relevant skill before starting **complex** tasks.\n"
+        progressive_loading_reminder = "- Progressive Loading: Load resources incrementally as referenced in skills\n"
 
     # Get deferred tools section (tool_search)
     deferred_tools_section = get_deferred_tools_prompt_section(app_config=app_config)
@@ -819,5 +868,7 @@ def apply_prompt_template(
         subagent_section=subagent_section,
         subagent_reminder=subagent_reminder,
         subagent_thinking=subagent_thinking,
+        skill_loading_reminder=skill_loading_reminder,
+        progressive_loading_reminder=progressive_loading_reminder,
         acp_section=acp_and_mounts_section,
     )

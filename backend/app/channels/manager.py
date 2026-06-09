@@ -165,6 +165,65 @@ def _normalize_custom_agent_name(raw_value: str) -> str:
     return normalized
 
 
+def _tool_message_displays_as_assistant(msg: Mapping[str, Any]) -> bool:
+    if "tool" not in str(msg.get("type", "")).lower():
+        return False
+    additional_kwargs = msg.get("additional_kwargs")
+    if isinstance(additional_kwargs, Mapping) and additional_kwargs.get("display_as_assistant") is True:
+        return True
+    kwargs = msg.get("kwargs")
+    if isinstance(kwargs, Mapping):
+        nested = kwargs.get("additional_kwargs")
+        if isinstance(nested, Mapping) and nested.get("display_as_assistant") is True:
+            return True
+    return msg.get("display_as_assistant") is True
+
+
+def _message_name(msg: Mapping[str, Any]) -> str:
+    name = msg.get("name")
+    if isinstance(name, str):
+        return name
+    kwargs = msg.get("kwargs")
+    if isinstance(kwargs, Mapping):
+        nested_name = kwargs.get("name")
+        if isinstance(nested_name, str):
+            return nested_name
+    return ""
+
+
+def _message_additional_kwargs(msg: Mapping[str, Any]) -> Mapping[str, Any]:
+    additional_kwargs = msg.get("additional_kwargs")
+    if isinstance(additional_kwargs, Mapping):
+        return additional_kwargs
+    kwargs = msg.get("kwargs")
+    if isinstance(kwargs, Mapping):
+        nested = kwargs.get("additional_kwargs")
+        if isinstance(nested, Mapping):
+            return nested
+    return {}
+
+
+def _has_summarization_metadata(metadata: Mapping[str, Any]) -> bool:
+    node = str(metadata.get("langgraph_node", "")).lower()
+    if "summarizationmiddleware" in node:
+        return True
+
+    tags = metadata.get("tags")
+    if isinstance(tags, (list, tuple, set)):
+        return any(str(tag).lower() == "middleware:summarize" for tag in tags)
+    if isinstance(tags, str):
+        return tags.lower() == "middleware:summarize"
+    return False
+
+
+def _is_hidden_context_message(msg: Mapping[str, Any]) -> bool:
+    if _message_name(msg).lower() == "summary":
+        return True
+    if msg.get("hide_from_ui") is True:
+        return True
+    return _message_additional_kwargs(msg).get("hide_from_ui") is True
+
+
 def _extract_response_text(result: dict | list) -> str:
     """Extract the last AI message text from a LangGraph runs.wait result.
 
@@ -190,12 +249,18 @@ def _extract_response_text(result: dict | list) -> str:
 
         msg_type = msg.get("type")
 
+        if _is_hidden_context_message(msg):
+            if str(msg_type).lower() == "human":
+                break
+            continue
+
         # Stop at the last human message — anything before it is a previous turn
         if msg_type == "human":
             break
 
-        # Check for tool messages from ask_clarification (interrupt case)
-        if msg_type == "tool" and msg.get("name") == "ask_clarification":
+        # Check for tool messages that should be surfaced as the user-facing
+        # response: clarification interrupts, and explicit return-direct answers.
+        if msg_type == "tool" and (_tool_message_displays_as_assistant(msg) or msg.get("name") == "ask_clarification"):
             content = msg.get("content", "")
             if isinstance(content, str) and content:
                 return content
@@ -288,6 +353,11 @@ def _accumulate_stream_text(
         if len(event_data) > 1:
             metadata = event_data[1]
 
+    if isinstance(metadata, Mapping):
+        node = str(metadata.get("langgraph_node", ""))
+        if node.startswith("TitleMiddleware.") or _has_summarization_metadata(metadata):
+            return None, current_message_id
+
     if isinstance(payload, str):
         message_id = current_message_id or "__default__"
         buffers[message_id] = _merge_stream_text(buffers.get(message_id, ""), payload)
@@ -296,8 +366,22 @@ def _accumulate_stream_text(
     if not isinstance(payload, Mapping):
         return None, current_message_id
 
+    if _is_hidden_context_message(payload):
+        return None, current_message_id
+
     payload_type = str(payload.get("type", "")).lower()
     if "tool" in payload_type:
+        if _tool_message_displays_as_assistant(payload):
+            text = _extract_text_content(payload.get("content"))
+            if not text and isinstance(payload.get("kwargs"), Mapping):
+                text = _extract_text_content(payload["kwargs"].get("content"))
+            if text:
+                message_id = _extract_stream_message_id(payload, metadata) or current_message_id or "__default__"
+                buffers[message_id] = text
+                return text, message_id
+        return None, current_message_id
+
+    if payload_type and "ai" not in payload_type:
         return None, current_message_id
 
     text = _extract_text_content(payload.get("content"))
@@ -873,7 +957,7 @@ class ChannelManager:
                 data = getattr(chunk, "data", None)
                 stream_run_id = _extract_stream_run_id(chunk, event, data) or stream_run_id
 
-                if event == "messages-tuple":
+                if event in {"messages", "messages-tuple"}:
                     accumulated_text, current_message_id = _accumulate_stream_text(streamed_buffers, current_message_id, data)
                     if accumulated_text:
                         latest_text = accumulated_text
@@ -910,6 +994,16 @@ class ChannelManager:
             else:
                 logger.exception("[Manager] streaming error: thread_id=%s", thread_id)
         finally:
+            if last_values is None and not latest_text and stream_error is None:
+                try:
+                    final_state = await client.threads.get_state(thread_id)
+                    if isinstance(final_state, Mapping):
+                        values = final_state.get("values")
+                        if isinstance(values, (dict, list)):
+                            last_values = values
+                except Exception:
+                    logger.warning("[Manager] failed to recover final thread state: thread_id=%s", thread_id, exc_info=True)
+
             result = last_values if last_values is not None else {"messages": [{"type": "ai", "content": latest_text}]}
             response_text = _extract_response_text(result)
             artifacts = _extract_artifacts(result)
