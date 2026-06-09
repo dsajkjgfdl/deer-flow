@@ -182,6 +182,44 @@ def test_multiple_before_summarization_hooks_run_in_registration_order() -> None
     assert call_order == ["first", "second", "third"]
 
 
+def test_summarization_logs_start_and_complete(caplog: pytest.LogCaptureFixture) -> None:
+    middleware = _middleware()
+
+    with caplog.at_level("INFO", logger="deerflow.agents.middlewares.summarization_middleware"):
+        result = middleware.before_model({"messages": _messages()}, _runtime(agent_name="hr-boss-agent"))
+
+    assert isinstance(result["messages"][0], RemoveMessage)
+    assert "summarization start" in caplog.text
+    assert "summarization complete" in caplog.text
+    assert "thread_id=thread-1" in caplog.text
+    assert "agent_name=hr-boss-agent" in caplog.text
+    assert "mode=sync" in caplog.text
+    assert "total_tokens=4" in caplog.text
+    assert "summarize_messages=2" in caplog.text
+    assert "preserved_messages=2" in caplog.text
+    assert "summary_len=18" in caplog.text
+    assert "compressed summary" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_async_summarization_logs_failure(caplog: pytest.LogCaptureFixture) -> None:
+    middleware = _middleware()
+    middleware._acreate_summary = mock.AsyncMock(side_effect=RuntimeError("summary boom"))
+
+    with caplog.at_level("INFO", logger="deerflow.agents.middlewares.summarization_middleware"):
+        with pytest.raises(RuntimeError, match="summary boom"):
+            await middleware.abefore_model({"messages": _messages()}, _runtime(agent_name="hr-boss-agent"))
+
+    assert "summarization start" in caplog.text
+    assert "summarization failed" in caplog.text
+    assert "thread_id=thread-1" in caplog.text
+    assert "agent_name=hr-boss-agent" in caplog.text
+    assert "mode=async" in caplog.text
+    assert "total_tokens=4" in caplog.text
+    assert "summarize_messages=2" in caplog.text
+    assert "preserved_messages=2" in caplog.text
+
+
 @pytest.mark.anyio
 async def test_abefore_model_calls_hooks_same_as_sync() -> None:
     captured: list[SummarizationEvent] = []
