@@ -21,8 +21,8 @@ def _make_middleware(**kwargs) -> DynamicContextMiddleware:
     return DynamicContextMiddleware(**kwargs)
 
 
-def _fake_runtime():
-    return SimpleNamespace(context={})
+def _fake_runtime(context: dict | None = None):
+    return SimpleNamespace(context=context or {})
 
 
 def _reminder_msg(content: str, msg_id: str) -> HumanMessage:
@@ -84,6 +84,30 @@ def test_memory_included_when_present():
     assert "User prefers Python." in reminder_content
     assert "<current_date>2026-05-08, Friday</current_date>" in reminder_content
     assert result["messages"][1].content == "Hi"
+
+
+def test_hr_boss_recommendation_fast_path_skips_memory_but_keeps_date():
+    mw = _make_middleware()
+    state = {"messages": [HumanMessage(content="我需要一个研发经理", id="msg-1")]}
+
+    with (
+        mock.patch(
+            "deerflow.agents.lead_agent.prompt._get_memory_context",
+            return_value="<memory>\nLarge prior HR context.\n</memory>",
+        ) as memory_mock,
+        mock.patch("deerflow.agents.middlewares.dynamic_context_middleware.datetime") as mock_dt,
+    ):
+        mock_dt.now.return_value.strftime.return_value = "2026-05-08, Friday"
+        result = mw.before_agent(
+            state,
+            _fake_runtime({"hr_boss_recommendation_fast_path": True}),
+        )
+
+    reminder_content = result["messages"][0].content
+    assert "Large prior HR context." not in reminder_content
+    assert "<memory>" not in reminder_content
+    assert "<current_date>2026-05-08, Friday</current_date>" in reminder_content
+    memory_mock.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

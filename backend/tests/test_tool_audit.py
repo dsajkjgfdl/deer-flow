@@ -19,6 +19,20 @@ def _runtime_context() -> SimpleNamespace:
     )
 
 
+def _runtime_config_context() -> SimpleNamespace:
+    return SimpleNamespace(
+        context=None,
+        config={
+            "context": {
+                "thread_id": "thread-from-config-context",
+                "run_id": "run-from-config-context",
+                "user_id": "user-from-config-context",
+                "agent_name": "hr-boss-agent",
+            }
+        },
+    )
+
+
 def test_write_tool_audit_from_runtime_extracts_runtime_context(monkeypatch):
     from deerflow.mcp import tools as mcp_tools
 
@@ -57,6 +71,82 @@ def test_write_tool_audit_from_runtime_extracts_runtime_context(monkeypatch):
     assert captured["metadata"] == {"argument_keys": ["question"]}
 
 
+def test_write_tool_audit_from_runtime_extracts_runtime_config_context(monkeypatch):
+    from deerflow.mcp import tools as mcp_tools
+
+    captured: dict = {}
+
+    class Repo:
+        def __init__(self, session_factory):
+            assert session_factory == "sf"
+
+        async def write_tool_audit(self, **kwargs):
+            captured.update(kwargs)
+            return kwargs
+
+    monkeypatch.setattr(mcp_tools, "get_session_factory", lambda: "sf")
+    monkeypatch.setattr(mcp_tools, "PlatformRepository", Repo)
+
+    asyncio.run(
+        mcp_tools.write_tool_audit_from_runtime(
+            _runtime_config_context(),
+            tool_name="text2cypher_answer_question",
+            mcp_server_name="text2cypher",
+            status="success",
+            latency_ms=17,
+        )
+    )
+
+    assert captured["thread_id"] == "thread-from-config-context"
+    assert captured["run_id"] == "run-from-config-context"
+    assert captured["user_id"] == "user-from-config-context"
+    assert captured["agent_name"] == "hr-boss-agent"
+
+
+def test_write_tool_audit_from_runtime_falls_back_to_langgraph_config(monkeypatch):
+    from deerflow.mcp import tools as mcp_tools
+
+    captured: dict = {}
+
+    class Repo:
+        def __init__(self, session_factory):
+            assert session_factory == "sf"
+
+        async def write_tool_audit(self, **kwargs):
+            captured.update(kwargs)
+            return kwargs
+
+    monkeypatch.setattr(mcp_tools, "get_session_factory", lambda: "sf")
+    monkeypatch.setattr(mcp_tools, "PlatformRepository", Repo)
+    monkeypatch.setattr(
+        mcp_tools,
+        "get_config",
+        lambda: {
+            "context": {
+                "thread_id": "thread-from-langgraph-config",
+                "run_id": "run-from-langgraph-config",
+                "user_id": "user-from-langgraph-config",
+                "agent_name": "hr-boss-agent",
+            }
+        },
+    )
+
+    asyncio.run(
+        mcp_tools.write_tool_audit_from_runtime(
+            None,
+            tool_name="text2cypher_answer_question",
+            mcp_server_name="text2cypher",
+            status="success",
+            latency_ms=17,
+        )
+    )
+
+    assert captured["thread_id"] == "thread-from-langgraph-config"
+    assert captured["run_id"] == "run-from-langgraph-config"
+    assert captured["user_id"] == "user-from-langgraph-config"
+    assert captured["agent_name"] == "hr-boss-agent"
+
+
 def test_mcp_wrapper_audits_success_without_raw_arguments(monkeypatch):
     from deerflow.mcp import tools as mcp_tools
 
@@ -69,9 +159,9 @@ def test_mcp_wrapper_audits_success_without_raw_arguments(monkeypatch):
             return object()
 
     class Pool:
-        async def get_session(self, server_name, thread_id, connection):
+        async def get_session(self, server_name, scope_key, connection):
             assert server_name == "text2cypher"
-            assert thread_id == "thread-1"
+            assert scope_key == "shared"
             return Session()
 
     async def placeholder(question: str) -> str:

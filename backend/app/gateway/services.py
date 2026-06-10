@@ -65,16 +65,131 @@ def format_sse(event: str, data: Any, *, event_id: str | None = None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def normalize_stream_modes(raw: list[str] | str | None) -> list[str]:
+_HR_BOSS_AGENT_ID = "hr-boss-agent"
+
+
+def _truthy_context_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def _is_hr_boss_run(assistant_id: str | None, context: Mapping[str, Any] | None) -> bool:
+    if assistant_id == _HR_BOSS_AGENT_ID:
+        return True
+    if isinstance(context, Mapping):
+        return context.get("agent_name") == _HR_BOSS_AGENT_ID
+    return False
+
+
+def _content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, Mapping):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts)
+    return ""
+
+
+def _latest_input_text(raw_input: dict[str, Any] | None) -> str:
+    if not isinstance(raw_input, Mapping):
+        return ""
+    messages = raw_input.get("messages")
+    if not isinstance(messages, list):
+        return ""
+    for message in reversed(messages):
+        if isinstance(message, BaseMessage):
+            text = _content_to_text(message.content)
+            if text.strip():
+                return text
+        elif isinstance(message, Mapping):
+            text = _content_to_text(message.get("content"))
+            if text.strip():
+                return text
+    return ""
+
+
+def should_use_hr_boss_recommendation_fast_path(
+    raw_input: dict[str, Any] | None,
+    *,
+    assistant_id: str | None = None,
+    context: Mapping[str, Any] | None = None,
+) -> bool:
+    """Detect HR Boss person/job recommendation prompts."""
+
+    if isinstance(context, Mapping) and context.get("hr_boss_recommendation_fast_path") is True:
+        return True
+    if not _is_hr_boss_run(assistant_id, context):
+        return False
+
+    text = _latest_input_text(raw_input)
+    if not text.strip():
+        return False
+
+    statistics_terms = ("多少", "几人", "人数", "数量", "统计", "平均", "占比", "比例", "分布", "排名", "排行", "最多", "最少")
+    if any(term in text for term in statistics_terms):
+        return False
+
+    high_confidence_person_terms = ("找一个", "找一名", "需要一名", "推荐一名")
+    if any(term in text for term in high_confidence_person_terms):
+        return True
+
+    recommendation_terms = ("推荐", "候选", "人选", "人岗匹配", "匹配", "适合", "需要一个")
+    talent_terms = ("经理", "主管", "负责人", "工程师", "研发", "销售", "人才", "岗位", "人员", "员工", "瓷粉")
+    return any(term in text for term in recommendation_terms) and any(term in text for term in talent_terms)
+
+
+def apply_hr_boss_recommendation_fast_path_context(body: Any) -> dict[str, Any]:
+    """Stamp low-latency defaults for HR Boss recommendation runs."""
+
+    body_context = getattr(body, "context", None)
+    if not isinstance(body_context, dict):
+        body_context = {}
+        body.context = body_context
+
+    body_context["hr_boss_recommendation_fast_path"] = True
+    body_context.setdefault("thinking_enabled", False)
+    return body_context
+
+
+def normalize_stream_modes(
+    raw: list[str] | str | None,
+    *,
+    assistant_id: str | None = None,
+    context: Mapping[str, Any] | None = None,
+) -> list[str]:
     """Normalize the stream_mode parameter to a list.
 
-    Default matches what ``useStream`` expects: values + messages-tuple.
+    HR Boss runs are long and tool-heavy, so by default they use incremental
+    message streaming instead of repeatedly sending full ``values`` snapshots.
+    A caller can set ``context.include_values_stream=true`` to opt back in.
     """
     if raw is None:
-        return ["values"]
+        modes = ["values"]
     if isinstance(raw, str):
-        return [raw]
-    return raw if raw else ["values"]
+        modes = [raw]
+    elif raw is not None:
+        modes = raw if raw else ["values"]
+
+    if _is_hr_boss_run(assistant_id, context):
+        include_values = isinstance(context, Mapping) and _truthy_context_flag(context.get("include_values_stream"))
+        if not include_values:
+            if raw is None or raw == []:
+                return ["messages-tuple"]
+            if any(mode in {"messages", "messages-tuple"} for mode in modes):
+                slimmed = [mode for mode in modes if mode != "values"]
+                return slimmed or modes
+
+    return modes
 
 
 def normalize_input(raw_input: dict[str, Any] | None) -> dict[str, Any]:
@@ -166,6 +281,7 @@ _CONTEXT_CONFIGURABLE_KEYS: frozenset[str] = frozenset(
         "agent_name",
         "effective_mcp_servers",
         "effective_skills",
+        "hr_boss_recommendation_fast_path",
         "is_bootstrap",
     }
 )
@@ -489,6 +605,13 @@ async def start_run(
         logger.warning("Failed to upsert thread_meta for %s (non-fatal)", sanitize_log_param(thread_id))
 
     agent_factory = resolve_agent_factory(body.assistant_id)
+    if should_use_hr_boss_recommendation_fast_path(
+        graph_input,
+        assistant_id=body.assistant_id,
+        context=getattr(body, "context", None),
+    ):
+        apply_hr_boss_recommendation_fast_path_context(body)
+
     config = build_run_config(thread_id, body.config, body.metadata, assistant_id=body.assistant_id)
 
     # Merge DeerFlow-specific context overrides into both ``configurable`` and ``context``.
@@ -498,7 +621,11 @@ async def start_run(
     merge_run_context_overrides(config, getattr(body, "context", None))
     inject_authenticated_user_context(config, request)
 
-    stream_modes = normalize_stream_modes(body.stream_mode)
+    stream_modes = normalize_stream_modes(
+        body.stream_mode,
+        assistant_id=body.assistant_id,
+        context=getattr(body, "context", None),
+    )
 
     task = asyncio.create_task(
         run_agent(

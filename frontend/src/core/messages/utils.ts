@@ -66,7 +66,10 @@ export function getMessageGroups(messages: Message[]): MessageGroup[] {
     }
 
     if (message.type === "tool") {
-      if (isClarificationToolMessage(message)) {
+      if (isAssistantDisplayToolMessage(message)) {
+        lastOpenGroup()?.messages.push(message);
+        groups.push({ id: message.id, type: "assistant", messages: [message] });
+      } else if (isClarificationToolMessage(message)) {
         // Add to the preceding processing group to preserve tool-call association,
         // then also open a standalone clarification group for prominent display.
         lastOpenGroup()?.messages.push(message);
@@ -429,6 +432,13 @@ export function hasPresentFiles(message: Message) {
 
 export function isClarificationToolMessage(message: Message) {
   return message.type === "tool" && message.name === "ask_clarification";
+}
+
+export function isAssistantDisplayToolMessage(message: Message) {
+  return (
+    message.type === "tool" &&
+    message.additional_kwargs?.display_as_assistant === true
+  );
 }
 
 export function extractPresentFilesFromMessage(message: Message) {

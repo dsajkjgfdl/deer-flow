@@ -18,11 +18,15 @@ middleware, and the async path inside ``TitleMiddleware``. Any new in-graph
 ``create_chat_model`` call must add to this list and pass the flag.
 """
 
+import json
 import logging
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
+from langchain.tools import ToolRuntime
+from langchain_core.messages import ToolMessage
 from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool, StructuredTool
 
 from deerflow.agents.lead_agent.prompt import apply_prompt_template
 from deerflow.agents.memory.summarization_hook import memory_flush_hook
@@ -46,6 +50,18 @@ from deerflow.skills.types import Skill
 from deerflow.tracing import build_tracing_callbacks
 
 logger = logging.getLogger(__name__)
+
+_HR_BOSS_AGENT_NAME = "hr-boss-agent"
+_HR_BOSS_RECOMMENDATION_SLOW_TOOLS: frozenset[str] = frozenset(
+    {
+        "hr-graphrag-qa_query_basic",
+        "hr-graphrag-qa_query_local",
+        "hr-graphrag-qa_query_global",
+        "hr-graphrag-qa_query_drift",
+    }
+)
+_HR_BOSS_RECOMMENDATION_MAX_TOKENS = 700
+_TEXT2CYPHER_ANSWER_TOOL_NAME = "text2cypher_answer_question"
 
 
 def _get_runtime_config(config: RunnableConfig) -> dict:
@@ -307,7 +323,8 @@ def _build_middlewares(
         middlewares.append(TokenUsageMiddleware())
 
     # Add TitleMiddleware
-    middlewares.append(TitleMiddleware(app_config=resolved_app_config))
+    if not _should_skip_title_middleware(agent_name=agent_name, runtime_config=cfg):
+        middlewares.append(TitleMiddleware(app_config=resolved_app_config))
 
     # Add MemoryMiddleware (after TitleMiddleware)
     middlewares.append(MemoryMiddleware(agent_name=agent_name, memory_config=resolved_app_config.memory))
@@ -373,6 +390,216 @@ def _load_enabled_skills_for_tool_policy(available_skills: set[str] | None, *, a
     if available_skills is None:
         return skills
     return [skill for skill in skills if skill.name in available_skills]
+
+
+def _filter_hr_boss_recommendation_tools(tools: list, *, agent_name: str | None, runtime_config: dict) -> list:
+    if agent_name != _HR_BOSS_AGENT_NAME:
+        return tools
+    if runtime_config.get("hr_boss_recommendation_fast_path") is not True:
+        return tools
+    return [tool for tool in tools if getattr(tool, "name", "") not in _HR_BOSS_RECOMMENDATION_SLOW_TOOLS]
+
+
+def _text2cypher_payload_from_tool_result(value) -> dict | None:
+    if isinstance(value, tuple) and value:
+        value = value[0]
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                try:
+                    parsed = json.loads(item["text"])
+                except json.JSONDecodeError:
+                    continue
+                return parsed if isinstance(parsed, dict) else None
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    if isinstance(value, dict):
+        return value
+    return None
+
+
+def _first_text(values) -> str:
+    if not isinstance(values, list):
+        return ""
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def _format_hr_boss_recommendation_record(record: dict, *, label: str) -> list[str]:
+    employee_name = str(record.get("employee_name") or "候选人").strip()
+    employee_id = str(record.get("employee_id") or "").strip()
+    title = f"{label}：{employee_name}"
+    if employee_id:
+        title += f"（{employee_id}）"
+
+    lines = [title]
+    department = str(record.get("current_department") or "").strip()
+    position = str(record.get("current_position") or "").strip()
+    tenure = record.get("tenure_years")
+    role_parts = [part for part in (department, position) if part]
+    if role_parts:
+        role_line = "，".join(role_parts)
+        if tenure is not None:
+            role_line += f"，司龄约{tenure:g}年" if isinstance(tenure, (int, float)) else f"，司龄{tenure}"
+        lines.append(f"- {role_line}")
+
+    school = _first_text(record.get("schools"))
+    major = _first_text(record.get("majors"))
+    degree = _first_text(record.get("degrees"))
+    education = "".join(part for part in (school, major, degree) if part)
+    if education:
+        lines.append(f"- {education}背景")
+
+    title_name = _first_text(record.get("title_names"))
+    project = _first_text(record.get("related_project_experiences"))
+    if project:
+        project = project.replace(" as  ()", "").replace(" ()", "").strip()
+        lines.append(f"- 相关项目：{project}")
+    elif title_name:
+        lines.append(f"- 职称：{title_name}")
+
+    return lines[:4]
+
+
+def _recommendation_selected_values(payload: dict) -> list[str]:
+    selected_values = payload.get("selected_values")
+    if not isinstance(selected_values, dict):
+        return []
+
+    values: list[str] = []
+    for candidates in selected_values.values():
+        if not isinstance(candidates, list):
+            continue
+        for candidate in candidates:
+            text = str(candidate).strip()
+            if text and text not in values:
+                values.append(text)
+    return values
+
+
+def _format_hr_boss_recommendation_basis(payload: dict, *, question: str) -> str:
+    parts: list[str] = []
+
+    scope = str(payload.get("scope") or "").strip()
+    if scope:
+        parts.append(f"范围：{scope}")
+
+    selected_values = _recommendation_selected_values(payload)
+    if selected_values:
+        displayed = "、".join(selected_values[:6])
+        if len(selected_values) > 6:
+            displayed += "等"
+        parts.append(f"候选口径：{displayed}")
+
+    assumptions = payload.get("assumptions")
+    if isinstance(assumptions, list):
+        assumption_text = "；".join(str(item).strip() for item in assumptions[:2] if str(item).strip())
+        if assumption_text:
+            parts.append(f"业务假设：{assumption_text}")
+
+    if not parts and question.strip():
+        compact_question = " ".join(question.split())
+        if len(compact_question) > 60:
+            compact_question = f"{compact_question[:57]}..."
+        parts.append(f"查询要求：{compact_question}")
+
+    if parts:
+        basis = "；".join(parts)
+    else:
+        basis = "候选依据来自结构化员工数据中的岗位、部门、职称、教育及相关经历"
+    return f"说明：{basis}；正式任用前建议再核实关键经历。"
+
+
+def _format_hr_boss_recommendation_answer(value, *, question: str = "") -> str:
+    payload = _text2cypher_payload_from_tool_result(value)
+    if not payload:
+        return "已完成查询，但结果格式无法直接转写，请稍后重试或缩小推荐条件。"
+    if payload.get("status") != "success" or payload.get("answerable") is False:
+        return str(payload.get("limitation") or "当前条件下没有形成可靠推荐结果，需要先补充岗位范围或筛选条件。")
+    if payload.get("result_type") != "recommendation":
+        return "推荐查询结果类型不是 recommendation，无法可靠生成候选建议。"
+
+    execution = payload.get("execution")
+    records = execution.get("records") if isinstance(execution, dict) else None
+    if not isinstance(records, list) or not records:
+        return "当前条件下没有查到可推荐的候选人。"
+    if any(not isinstance(record, dict) or not str(record.get("employee_name") or "").strip() for record in records):
+        return "推荐查询结果缺少统一推荐结果字段 employee_name，无法可靠生成候选建议。"
+
+    lines: list[str] = []
+    lines.extend(_format_hr_boss_recommendation_record(records[0], label="首推"))
+    for record in records[1:3]:
+        lines.append("")
+        lines.extend(_format_hr_boss_recommendation_record(record, label="备选"))
+    lines.append("")
+    lines.append(_format_hr_boss_recommendation_basis(payload, question=question))
+    return "\n".join(lines)
+
+
+def _hr_boss_recommendation_direct_message(answer: str, runtime: ToolRuntime) -> ToolMessage:
+    return ToolMessage(
+        content=answer,
+        tool_call_id=runtime.tool_call_id,
+        additional_kwargs={
+            "display_as_assistant": True,
+            "hr_boss_recommendation_fast_path": True,
+        },
+    )
+
+
+def _wrap_hr_boss_recommendation_direct_tool(tool: BaseTool) -> BaseTool:
+    def _run(runtime: ToolRuntime, **kwargs):
+        answer = _format_hr_boss_recommendation_answer(
+            tool.invoke(kwargs),
+            question=str(kwargs.get("question") or ""),
+        )
+        return _hr_boss_recommendation_direct_message(answer, runtime)
+
+    async def _arun(runtime: ToolRuntime, **kwargs):
+        answer = _format_hr_boss_recommendation_answer(
+            await tool.ainvoke(kwargs),
+            question=str(kwargs.get("question") or ""),
+        )
+        return _hr_boss_recommendation_direct_message(answer, runtime)
+
+    return StructuredTool.from_function(
+        func=_run,
+        coroutine=_arun,
+        name=tool.name,
+        description=tool.description,
+        args_schema=tool.args_schema,
+        return_direct=True,
+    )
+
+
+def _apply_hr_boss_recommendation_direct_tools(tools: list, *, agent_name: str | None, runtime_config: dict) -> list:
+    if agent_name != _HR_BOSS_AGENT_NAME:
+        return tools
+    if runtime_config.get("hr_boss_recommendation_fast_path") is not True:
+        return tools
+    return [_wrap_hr_boss_recommendation_direct_tool(tool) if getattr(tool, "name", "") == _TEXT2CYPHER_ANSWER_TOOL_NAME else tool for tool in tools]
+
+
+def _should_skip_title_middleware(*, agent_name: str | None, runtime_config: dict) -> bool:
+    return agent_name == _HR_BOSS_AGENT_NAME and runtime_config.get("hr_boss_recommendation_fast_path") is True
+
+
+def _model_kwargs_for_runtime(*, agent_name: str | None, runtime_config: dict, reasoning_effort: str | None) -> dict:
+    kwargs = {}
+    if reasoning_effort is not None:
+        kwargs["reasoning_effort"] = reasoning_effort
+    if agent_name == _HR_BOSS_AGENT_NAME and runtime_config.get("hr_boss_recommendation_fast_path") is True:
+        kwargs["max_tokens"] = _HR_BOSS_RECOMMENDATION_MAX_TOKENS
+    return kwargs
 
 
 def make_lead_agent(config: RunnableConfig):
@@ -507,8 +734,12 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     if effective_allowed_tools is not None:
         tool_kwargs["allowed_tools"] = effective_allowed_tools
     tools = get_available_tools(**tool_kwargs)
+    tools = _filter_hr_boss_recommendation_tools(tools, agent_name=agent_name, runtime_config=cfg)
+    extra_tools = _filter_hr_boss_recommendation_tools(extra_tools, agent_name=agent_name, runtime_config=cfg)
+    tools = _apply_hr_boss_recommendation_direct_tools(tools, agent_name=agent_name, runtime_config=cfg)
+    model_kwargs = _model_kwargs_for_runtime(agent_name=agent_name, runtime_config=cfg, reasoning_effort=reasoning_effort)
     return create_agent(
-        model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort, app_config=resolved_app_config, attach_tracing=False),
+        model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, app_config=resolved_app_config, attach_tracing=False, **model_kwargs),
         tools=filter_tools_by_skill_allowed_tools(tools + extra_tools, skills_for_tool_policy),
         middleware=_build_middlewares(config, model_name=model_name, agent_name=agent_name, app_config=resolved_app_config),
         system_prompt=apply_prompt_template(
@@ -517,6 +748,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             agent_name=agent_name,
             available_skills=set(agent_config.skills) if agent_config and agent_config.skills is not None else None,
             app_config=resolved_app_config,
+            hr_boss_recommendation_fast_path=agent_name == _HR_BOSS_AGENT_NAME and cfg.get("hr_boss_recommendation_fast_path") is True,
         ),
         state_schema=ThreadState,
     )

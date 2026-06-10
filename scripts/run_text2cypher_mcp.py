@@ -38,9 +38,10 @@ def run_packaged_server() -> None:
     from text2cypher.core.engine import Text2CypherEngine
     from text2cypher.core.executor import CypherExecutor
     from text2cypher.core.generator import CypherGenerator
+    from text2cypher.core.planner import SinglePassPlanner
     from text2cypher.core.schema_service import SchemaService
-    from text2cypher.core.term_resolver import TermResolver
     from text2cypher.core.validator import CypherValidator
+    from text2cypher.core.value_catalog import ValueCatalogService
 
     settings = AppSettings.from_env()
     validator = CypherValidator(settings)
@@ -49,7 +50,9 @@ def run_packaged_server() -> None:
         generator=CypherGenerator(settings),
         validator=validator,
         executor=CypherExecutor(settings, validator=validator),
-        term_resolver=TermResolver(settings),
+        planner=SinglePassPlanner(settings),
+        value_catalog_service=ValueCatalogService(settings),
+        total_timeout_seconds=settings.answer_timeout_seconds,
     )
     server = create_server(engine)
     server.run()

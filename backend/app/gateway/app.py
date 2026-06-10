@@ -50,6 +50,19 @@ logger = logging.getLogger(__name__)
 _SHUTDOWN_HOOK_TIMEOUT_SECONDS = 5.0
 
 
+async def _initialize_mcp_tools_before_channels() -> None:
+    """Load MCP tool schemas before IM channels can accept user messages."""
+
+    try:
+        from deerflow.mcp import initialize_mcp_tools
+
+        tools = await initialize_mcp_tools()
+        logger.info("MCP tools initialized before channel startup: %d tool(s)", len(tools))
+    except Exception:
+        logger.exception("MCP tool initialization failed before channel startup")
+        raise
+
+
 async def _ensure_admin_user(app: FastAPI) -> None:
     """Startup hook: handle first boot and migrate orphan threads otherwise.
 
@@ -188,6 +201,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Check admin bootstrap state and migrate orphan threads after admin exists.
         # Must run AFTER langgraph_runtime so app.state.store is available for thread migration
         await _ensure_admin_user(app)
+
+        # Channel messages can immediately create agent runs. Finish MCP tool
+        # discovery first so the first run cannot race the async initialization
+        # task and block the gateway event loop while reading the sync cache.
+        await _initialize_mcp_tools_before_channels()
 
         # Start IM channel service if any channels are configured
         try:

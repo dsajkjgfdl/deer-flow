@@ -123,6 +123,24 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
     async def abefore_model(self, state: AgentState, runtime: Runtime) -> dict | None:
         return await self._amaybe_summarize(state, runtime)
 
+    def _summarization_log_context(
+        self,
+        runtime: Runtime,
+        *,
+        mode: str,
+        total_tokens: int,
+        messages_to_summarize: list[AnyMessage],
+        preserved_messages: list[AnyMessage],
+    ) -> str:
+        return (
+            f"thread_id={_resolve_thread_id(runtime)} "
+            f"agent_name={_resolve_agent_name(runtime)} "
+            f"mode={mode} "
+            f"total_tokens={total_tokens} "
+            f"summarize_messages={len(messages_to_summarize)} "
+            f"preserved_messages={len(preserved_messages)}"
+        )
+
     def _maybe_summarize(self, state: AgentState, runtime: Runtime) -> dict | None:
         messages = state["messages"]
         self._ensure_message_ids(messages)
@@ -138,8 +156,21 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
         messages_to_summarize, preserved_messages = self._partition_with_skill_rescue(messages, cutoff_index)
         messages_to_summarize, preserved_messages = self._preserve_dynamic_context_reminders(messages_to_summarize, preserved_messages)
         self._fire_hooks(messages_to_summarize, preserved_messages, runtime)
-        summary = self._create_summary(messages_to_summarize)
-        new_messages = self._build_new_messages(summary)
+        log_context = self._summarization_log_context(
+            runtime,
+            mode="sync",
+            total_tokens=total_tokens,
+            messages_to_summarize=messages_to_summarize,
+            preserved_messages=preserved_messages,
+        )
+        logger.info("summarization start: %s", log_context)
+        try:
+            summary = self._create_summary(messages_to_summarize)
+            new_messages = self._build_new_messages(summary)
+        except Exception:
+            logger.exception("summarization failed: %s", log_context)
+            raise
+        logger.info("summarization complete: %s summary_len=%d", log_context, len(summary))
 
         return {
             "messages": [
@@ -164,8 +195,21 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
         messages_to_summarize, preserved_messages = self._partition_with_skill_rescue(messages, cutoff_index)
         messages_to_summarize, preserved_messages = self._preserve_dynamic_context_reminders(messages_to_summarize, preserved_messages)
         self._fire_hooks(messages_to_summarize, preserved_messages, runtime)
-        summary = await self._acreate_summary(messages_to_summarize)
-        new_messages = self._build_new_messages(summary)
+        log_context = self._summarization_log_context(
+            runtime,
+            mode="async",
+            total_tokens=total_tokens,
+            messages_to_summarize=messages_to_summarize,
+            preserved_messages=preserved_messages,
+        )
+        logger.info("summarization start: %s", log_context)
+        try:
+            summary = await self._acreate_summary(messages_to_summarize)
+            new_messages = self._build_new_messages(summary)
+        except Exception:
+            logger.exception("summarization failed: %s", log_context)
+            raise
+        logger.info("summarization complete: %s summary_len=%d", log_context, len(summary))
 
         return {
             "messages": [

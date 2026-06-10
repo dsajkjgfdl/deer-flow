@@ -353,6 +353,28 @@ class TestExtractResponseText:
         }
         assert _extract_response_text(result) == "Could you clarify?"
 
+    def test_display_as_assistant_tool_message(self):
+        from app.channels.manager import _extract_response_text
+
+        result = {
+            "messages": [
+                {"type": "human", "content": "recommend"},
+                {
+                    "type": "ai",
+                    "content": "",
+                    "tool_calls": [{"name": "text2cypher_answer_question", "args": {}}],
+                },
+                {
+                    "type": "tool",
+                    "name": "text2cypher_answer_question",
+                    "content": "首推：候选人A",
+                    "additional_kwargs": {"display_as_assistant": True},
+                },
+            ]
+        }
+
+        assert _extract_response_text(result) == "首推：候选人A"
+
     def test_does_not_leak_previous_turn_text(self):
         """When current turn AI has no text (only tool calls), do not return previous turn's text."""
         from app.channels.manager import _extract_response_text
@@ -372,6 +394,111 @@ class TestExtractResponseText:
         }
         # Should return "" (no text in current turn), NOT "Hi there!" from previous turn
         assert _extract_response_text(result) == ""
+
+    def test_plain_tool_message_is_not_displayed_as_response(self):
+        from app.channels.manager import _extract_response_text
+
+        result = {
+            "messages": [
+                {"type": "human", "content": "export data"},
+                {"type": "ai", "content": "", "tool_calls": [{"name": "present_files", "args": {}}]},
+                {"type": "tool", "name": "present_files", "content": "ok"},
+            ]
+        }
+
+        assert _extract_response_text(result) == ""
+
+    def test_summary_named_ai_message_is_not_displayed_as_response(self):
+        from app.channels.manager import _extract_response_text
+
+        result = {
+            "messages": [
+                {"type": "human", "content": "continue"},
+                {"type": "ai", "name": "summary", "content": "SESSION INTENT\nSUMMARY\nARTIFACTS\nNEXT STEPS"},
+            ]
+        }
+
+        assert _extract_response_text(result) == ""
+
+    def test_accumulates_display_as_assistant_tool_stream_text(self):
+        from app.channels.manager import _accumulate_stream_text
+
+        text, message_id = _accumulate_stream_text(
+            {},
+            None,
+            [
+                {
+                    "id": "tool-msg-1",
+                    "type": "ToolMessage",
+                    "content": "首推：候选人A",
+                    "additional_kwargs": {"display_as_assistant": True},
+                },
+                {"langgraph_node": "tools"},
+            ],
+        )
+
+        assert text == "首推：候选人A"
+        assert message_id == "tool-msg-1"
+
+    def test_ignores_summarization_stream_text(self):
+        from app.channels.manager import _accumulate_stream_text
+
+        buffers = {}
+        text, message_id = _accumulate_stream_text(
+            buffers,
+            None,
+            [
+                {"id": "summary-ai", "type": "AIMessageChunk", "content": "SESSION INTENT\nSUMMARY"},
+                {"langgraph_node": "model", "tags": ["middleware:summarize"]},
+            ],
+        )
+
+        assert text is None
+        assert message_id is None
+        assert buffers == {}
+
+    def test_ignores_summary_named_stream_text(self):
+        from app.channels.manager import _accumulate_stream_text
+
+        buffers = {}
+        text, message_id = _accumulate_stream_text(
+            buffers,
+            None,
+            [
+                {"id": "summary-ai", "type": "AIMessageChunk", "name": "summary", "content": "ARTIFACTS\nNEXT STEPS"},
+                {"langgraph_node": "model"},
+            ],
+        )
+
+        assert text is None
+        assert message_id is None
+        assert buffers == {}
+
+    def test_ignores_human_and_title_middleware_stream_text(self):
+        from app.channels.manager import _accumulate_stream_text
+
+        buffers = {}
+        human_text, message_id = _accumulate_stream_text(
+            buffers,
+            None,
+            [
+                {"id": "human-1", "type": "HumanMessage", "content": "Who are you?"},
+                {"langgraph_node": "DynamicContextMiddleware.before_agent"},
+            ],
+        )
+        title_text, message_id = _accumulate_stream_text(
+            buffers,
+            message_id,
+            [
+                {"id": "title-1", "type": "AIMessageChunk", "content": "Agent Introduction"},
+                {"langgraph_node": "TitleMiddleware.after_model"},
+            ],
+        )
+
+        assert human_text is None
+        assert title_text is None
+        assert message_id is None
+        assert buffers == {}
 
 
 # ---------------------------------------------------------------------------
@@ -997,6 +1124,124 @@ class TestChannelManager:
             assert [msg.text for msg in outbound_received] == ["Hello", "Hello world", "Hello world"]
             assert [msg.is_final for msg in outbound_received] == [False, False, True]
             assert all(msg.thread_ts == "om-source-1" for msg in outbound_received)
+
+        _run(go())
+
+    def test_handle_wecom_chat_accepts_runtime_messages_event_name(self, monkeypatch):
+        """Gateway emits `messages`, even when the SDK requested `messages-tuple`."""
+        from app.channels.manager import ChannelManager
+
+        monkeypatch.setattr("app.channels.manager.STREAM_UPDATE_MIN_INTERVAL_SECONDS", 0.0)
+
+        async def go():
+            bus = MessageBus()
+            store = ChannelStore(path=Path(tempfile.mkdtemp()) / "store.json")
+            manager = ChannelManager(bus=bus, store=store)
+
+            outbound_received = []
+
+            async def capture_outbound(msg):
+                outbound_received.append(msg)
+
+            bus.subscribe_outbound(capture_outbound)
+
+            stream_events = [
+                _make_stream_part(
+                    "messages",
+                    [
+                        {"id": "ai-1", "content": "我是人岗匹配智能助手。", "type": "AIMessageChunk"},
+                        {"langgraph_node": "agent"},
+                    ],
+                ),
+            ]
+
+            mock_client = _make_mock_langgraph_client()
+            mock_client.runs.stream = MagicMock(return_value=_make_async_iterator(stream_events))
+            manager._client = mock_client
+
+            await manager.start()
+
+            await bus.publish_inbound(
+                InboundMessage(
+                    channel_name="wecom",
+                    chat_id="chat1",
+                    user_id="user1",
+                    text="你是谁",
+                    thread_ts="wecom-msg-1",
+                )
+            )
+            await _wait_for(lambda: any(msg.is_final for msg in outbound_received))
+            await manager.stop()
+
+            final_msg = next(msg for msg in outbound_received if msg.is_final)
+            assert final_msg.text == "我是人岗匹配智能助手。"
+
+        _run(go())
+
+    def test_handle_wecom_chat_recovers_final_state_when_slim_stream_has_no_answer(self, monkeypatch):
+        from app.channels.manager import ChannelManager
+
+        monkeypatch.setattr("app.channels.manager.STREAM_UPDATE_MIN_INTERVAL_SECONDS", 0.0)
+
+        async def go():
+            bus = MessageBus()
+            store = ChannelStore(path=Path(tempfile.mkdtemp()) / "store.json")
+            manager = ChannelManager(bus=bus, store=store)
+
+            outbound_received = []
+
+            async def capture_outbound(msg):
+                outbound_received.append(msg)
+
+            bus.subscribe_outbound(capture_outbound)
+
+            stream_events = [
+                _make_stream_part(
+                    "messages",
+                    [
+                        {"id": "human-1", "type": "HumanMessage", "content": "Who are you?"},
+                        {"langgraph_node": "DynamicContextMiddleware.before_agent"},
+                    ],
+                ),
+                _make_stream_part(
+                    "messages",
+                    [
+                        {"id": "title-1", "type": "AIMessageChunk", "content": "Agent Introduction"},
+                        {"langgraph_node": "TitleMiddleware.after_model"},
+                    ],
+                ),
+            ]
+
+            mock_client = _make_mock_langgraph_client()
+            mock_client.runs.stream = MagicMock(return_value=_make_async_iterator(stream_events))
+            mock_client.threads.get_state = AsyncMock(
+                return_value={
+                    "values": {
+                        "messages": [
+                            {"type": "human", "content": "Who are you?"},
+                            {"type": "ai", "content": "I am the HR staffing assistant."},
+                        ]
+                    }
+                }
+            )
+            manager._client = mock_client
+
+            await manager.start()
+            await bus.publish_inbound(
+                InboundMessage(
+                    channel_name="wecom",
+                    chat_id="chat1",
+                    user_id="user1",
+                    text="Who are you?",
+                    thread_ts="wecom-msg-1",
+                )
+            )
+            await _wait_for(lambda: any(msg.is_final for msg in outbound_received))
+            await manager.stop()
+
+            final_msg = next(msg for msg in outbound_received if msg.is_final)
+            assert final_msg.text == "I am the HR staffing assistant."
+            mock_client.threads.get_state.assert_awaited_once()
 
         _run(go())
 

@@ -60,6 +60,106 @@ def test_normalize_stream_modes_empty_list():
     assert normalize_stream_modes([]) == ["values"]
 
 
+def test_normalize_stream_modes_hr_boss_defaults_to_messages_tuple():
+    from app.gateway.services import normalize_stream_modes
+
+    assert normalize_stream_modes(None, context={"agent_name": "hr-boss-agent"}) == ["messages-tuple"]
+
+
+def test_normalize_stream_modes_hr_boss_drops_full_values_when_messages_stream_exists():
+    from app.gateway.services import normalize_stream_modes
+
+    assert normalize_stream_modes(
+        ["values", "messages-tuple"],
+        context={"agent_name": "hr-boss-agent"},
+    ) == ["messages-tuple"]
+
+
+def test_normalize_stream_modes_hr_boss_values_stream_can_be_opted_back_in():
+    from app.gateway.services import normalize_stream_modes
+
+    assert normalize_stream_modes(
+        ["values", "messages-tuple"],
+        context={"agent_name": "hr-boss-agent", "include_values_stream": True},
+    ) == ["values", "messages-tuple"]
+
+
+def test_normalize_stream_modes_non_hr_boss_keeps_requested_values():
+    from app.gateway.services import normalize_stream_modes
+
+    assert normalize_stream_modes(
+        ["values", "messages-tuple"],
+        context={"agent_name": "finance-agent"},
+    ) == ["values", "messages-tuple"]
+
+
+def test_hr_boss_recommendation_fast_path_detects_user_query():
+    from app.gateway.services import should_use_hr_boss_recommendation_fast_path
+
+    assert should_use_hr_boss_recommendation_fast_path(
+        {"messages": [{"role": "user", "content": "我需要一个研发经理，帮从集团推荐一个瓷粉研发的人"}]},
+        assistant_id="lead_agent",
+        context={"agent_name": "hr-boss-agent"},
+    )
+
+
+def test_apply_hr_boss_recommendation_fast_path_context_disables_thinking_by_default():
+    from types import SimpleNamespace
+
+    from app.gateway.services import apply_hr_boss_recommendation_fast_path_context
+
+    body = SimpleNamespace(context=None)
+
+    apply_hr_boss_recommendation_fast_path_context(body)
+
+    assert body.context["hr_boss_recommendation_fast_path"] is True
+    assert body.context["thinking_enabled"] is False
+
+
+def test_apply_hr_boss_recommendation_fast_path_context_preserves_explicit_thinking_choice():
+    from types import SimpleNamespace
+
+    from app.gateway.services import apply_hr_boss_recommendation_fast_path_context
+
+    body = SimpleNamespace(context={"thinking_enabled": True})
+
+    apply_hr_boss_recommendation_fast_path_context(body)
+
+    assert body.context["hr_boss_recommendation_fast_path"] is True
+    assert body.context["thinking_enabled"] is True
+
+
+def test_hr_boss_recommendation_fast_path_ignores_plain_statistics():
+    from app.gateway.services import should_use_hr_boss_recommendation_fast_path
+
+    assert not should_use_hr_boss_recommendation_fast_path(
+        {"messages": [{"role": "user", "content": "福建火炬电子科技股份有限公司有多少员工？"}]},
+        assistant_id="lead_agent",
+        context={"agent_name": "hr-boss-agent"},
+    )
+
+
+def test_hr_boss_recommendation_fast_path_ignores_statistics_with_find_wording():
+    from app.gateway.services import should_use_hr_boss_recommendation_fast_path
+
+    assert not should_use_hr_boss_recommendation_fast_path(
+        {"messages": [{"role": "user", "content": "帮我找一下销售工程师有多少人"}]},
+        assistant_id="lead_agent",
+        context={"agent_name": "hr-boss-agent"},
+    )
+
+
+def test_hr_boss_recommendation_fast_path_detects_non_research_roles():
+    from app.gateway.services import should_use_hr_boss_recommendation_fast_path
+
+    for question in ("帮我找一个销售经理", "我需要一名财务主管", "我需要一名法务"):
+        assert should_use_hr_boss_recommendation_fast_path(
+            {"messages": [{"role": "user", "content": question}]},
+            assistant_id="lead_agent",
+            context={"agent_name": "hr-boss-agent"},
+        )
+
+
 def test_normalize_input_none():
     from app.gateway.services import normalize_input
 
