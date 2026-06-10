@@ -1,6 +1,7 @@
 """Tests for the MCP persistent-session pool."""
 
 import asyncio
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -85,13 +86,9 @@ async def test_concurrent_get_session_for_same_key_creates_once_and_closes_once(
         return cm
 
     with patch("langchain_mcp_adapters.sessions.create_session", side_effect=make_cm) as create_session:
-        first = asyncio.create_task(
-            pool.get_session("text2cypher", "shared", {"transport": "stdio", "command": "x", "args": []})
-        )
+        first = asyncio.create_task(pool.get_session("text2cypher", "shared", {"transport": "stdio", "command": "x", "args": []}))
         await creation_started.wait()
-        second = asyncio.create_task(
-            pool.get_session("text2cypher", "shared", {"transport": "stdio", "command": "x", "args": []})
-        )
+        second = asyncio.create_task(pool.get_session("text2cypher", "shared", {"transport": "stdio", "command": "x", "args": []}))
         await asyncio.sleep(0)
         allow_creation.set()
         first_session, second_session = await asyncio.gather(first, second)
@@ -104,6 +101,82 @@ async def test_concurrent_get_session_for_same_key_creates_once_and_closes_once(
     await pool.close_all()
 
     assert cms[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_close_all_cancels_pending_session_creation():
+    """Closing the pool must not allow an in-flight creator to register later."""
+    pool = MCPSessionPool()
+    creation_started = asyncio.Event()
+    allow_creation = asyncio.Event()
+
+    class SlowCm:
+        def __init__(self):
+            self.closed = False
+
+        async def __aenter__(self):
+            creation_started.set()
+            await allow_creation.wait()
+            return AsyncMock()
+
+        async def __aexit__(self, *args):
+            self.closed = True
+            return False
+
+    cm = SlowCm()
+    with patch("langchain_mcp_adapters.sessions.create_session", return_value=cm):
+        pending = asyncio.create_task(pool.get_session("text2cypher", "shared", {"transport": "stdio", "command": "x", "args": []}))
+        await creation_started.wait()
+        await pool.close_all()
+        allow_creation.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+
+    assert len(pool._entries) == 0
+    assert len(pool._context_managers) == 0
+    assert len(pool._pending_creations) == 0
+
+
+def test_close_all_sync_cancels_pending_session_creation():
+    """Synchronous cache reset must also stop creators owned by another loop."""
+    pool = MCPSessionPool()
+    creation_started = threading.Event()
+    creation_cancelled = threading.Event()
+
+    class SlowCm:
+        async def __aenter__(self):
+            creation_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                creation_cancelled.set()
+                raise
+
+        async def __aexit__(self, *args):
+            return False
+
+    async def create_pending():
+        with patch("langchain_mcp_adapters.sessions.create_session", return_value=SlowCm()):
+            await pool.get_session("text2cypher", "shared", {"transport": "stdio", "command": "x", "args": []})
+
+    def run_loop():
+        try:
+            asyncio.run(create_pending())
+        except asyncio.CancelledError:
+            pass
+
+    thread = threading.Thread(target=run_loop, daemon=True)
+    thread.start()
+    assert creation_started.wait(timeout=1)
+
+    pool.close_all_sync()
+    thread.join(timeout=0.2)
+
+    assert creation_cancelled.is_set()
+    assert not thread.is_alive()
+    assert len(pool._entries) == 0
+    assert len(pool._pending_creations) == 0
 
 
 @pytest.mark.asyncio
@@ -463,9 +536,7 @@ async def test_prewarm_shared_mcp_session_does_not_cancel_slow_stdio_startup(mon
     monkeypatch.setattr(mcp_tools, "get_session_pool", lambda: Pool())
     monkeypatch.setattr(mcp_tools, "_SHARED_SESSION_PREWARM_TIMEOUT_SECONDS", 0.01, raising=False)
 
-    await mcp_tools._prewarm_shared_mcp_sessions(
-        {"text2cypher": {"transport": "stdio", "command": "text2cypher"}}
-    )
+    await mcp_tools._prewarm_shared_mcp_sessions({"text2cypher": {"transport": "stdio", "command": "text2cypher"}})
 
     assert completed is True
 

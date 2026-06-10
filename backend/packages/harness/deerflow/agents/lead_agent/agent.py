@@ -20,7 +20,6 @@ middleware, and the async path inside ``TitleMiddleware``. Any new in-graph
 
 import json
 import logging
-from typing import Any
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
@@ -587,12 +586,7 @@ def _apply_hr_boss_recommendation_direct_tools(tools: list, *, agent_name: str |
         return tools
     if runtime_config.get("hr_boss_recommendation_fast_path") is not True:
         return tools
-    return [
-        _wrap_hr_boss_recommendation_direct_tool(tool)
-        if getattr(tool, "name", "") == _TEXT2CYPHER_ANSWER_TOOL_NAME
-        else tool
-        for tool in tools
-    ]
+    return [_wrap_hr_boss_recommendation_direct_tool(tool) if getattr(tool, "name", "") == _TEXT2CYPHER_ANSWER_TOOL_NAME else tool for tool in tools]
 
 
 def _should_skip_title_middleware(*, agent_name: str | None, runtime_config: dict) -> bool:
@@ -748,13 +742,13 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
         model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, app_config=resolved_app_config, attach_tracing=False, **model_kwargs),
         tools=filter_tools_by_skill_allowed_tools(tools + extra_tools, skills_for_tool_policy),
         middleware=_build_middlewares(config, model_name=model_name, agent_name=agent_name, app_config=resolved_app_config),
-            system_prompt=apply_prompt_template(
-                subagent_enabled=subagent_enabled,
-                max_concurrent_subagents=max_concurrent_subagents,
-                agent_name=agent_name,
-                available_skills=set(agent_config.skills) if agent_config and agent_config.skills is not None else None,
-                app_config=resolved_app_config,
-                hr_boss_recommendation_fast_path=agent_name == _HR_BOSS_AGENT_NAME and cfg.get("hr_boss_recommendation_fast_path") is True,
-            ),
-            state_schema=ThreadState,
-        )
+        system_prompt=apply_prompt_template(
+            subagent_enabled=subagent_enabled,
+            max_concurrent_subagents=max_concurrent_subagents,
+            agent_name=agent_name,
+            available_skills=set(agent_config.skills) if agent_config and agent_config.skills is not None else None,
+            app_config=resolved_app_config,
+            hr_boss_recommendation_fast_path=agent_name == _HR_BOSS_AGENT_NAME and cfg.get("hr_boss_recommendation_fast_path") is True,
+        ),
+        state_schema=ThreadState,
+    )

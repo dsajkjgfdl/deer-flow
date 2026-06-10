@@ -13,6 +13,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi import FastAPI
 
 
@@ -118,5 +119,38 @@ def test_lifespan_initializes_mcp_tools_before_starting_channels():
                     entered = True
                 if entered:
                     await lifespan_context.__aexit__(None, None, None)
+
+    asyncio.run(run())
+
+
+def test_lifespan_does_not_start_channels_when_mcp_initialization_fails():
+    """A gateway without required MCP tools must not accept channel traffic."""
+
+    from app.gateway.app import lifespan
+
+    async def run() -> None:
+        channel_started = False
+        app = FastAPI()
+
+        async def fail_initialize_mcp_tools():
+            raise RuntimeError("temporary MCP startup failure")
+
+        async def fake_start(_startup_config):
+            nonlocal channel_started
+            channel_started = True
+            return MagicMock()
+
+        with (
+            patch("app.gateway.app.get_app_config"),
+            patch("app.gateway.app.get_gateway_config", return_value=MagicMock(host="x", port=0)),
+            patch("app.gateway.app.langgraph_runtime", _noop_langgraph_runtime),
+            patch("deerflow.mcp.initialize_mcp_tools", side_effect=fail_initialize_mcp_tools),
+            patch("app.channels.service.start_channel_service", side_effect=fake_start),
+        ):
+            with pytest.raises(RuntimeError, match="temporary MCP startup failure"):
+                async with lifespan(app):
+                    pass
+
+        assert channel_started is False
 
     asyncio.run(run())

@@ -80,9 +80,7 @@ class MCPSessionPool:
                     name=f"mcp-session-create:{server_name}/{scope_key}",
                 )
                 self._pending_creations[pending_key] = creation_task
-                creation_task.add_done_callback(
-                    lambda done, pending_key=pending_key: self._finish_pending_creation(pending_key, done)
-                )
+                creation_task.add_done_callback(lambda done, pending_key=pending_key: self._finish_pending_creation(pending_key, done))
 
         # Shield the shared creation task so cancellation of one caller does not
         # cancel session creation for every other waiter.
@@ -176,6 +174,37 @@ class MCPSessionPool:
             return
         task.exception()
 
+    @staticmethod
+    async def _cancel_task(task: asyncio.Task[ClientSession]) -> None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _cancel_pending_creations(self, *, server_name: str | None = None, scope_key: str | None = None) -> None:
+        """Cancel matching in-flight creators before closing registered sessions."""
+        current_loop = asyncio.get_running_loop()
+        with self._lock:
+            matching = [(key, task) for key, task in self._pending_creations.items() if (server_name is None or key[0] == server_name) and (scope_key is None or key[1] == scope_key)]
+            for key, _ in matching:
+                self._pending_creations.pop(key, None)
+
+        local_tasks: list[asyncio.Task[ClientSession]] = []
+        foreign_futures: list[asyncio.Future[None]] = []
+        for _, task in matching:
+            if task.done():
+                continue
+            owner_loop = task.get_loop()
+            if owner_loop is current_loop:
+                task.cancel()
+                local_tasks.append(task)
+            elif not owner_loop.is_closed():
+                future = asyncio.run_coroutine_threadsafe(self._cancel_task(task), owner_loop)
+                foreign_futures.append(asyncio.wrap_future(future))
+
+        if local_tasks:
+            await asyncio.gather(*local_tasks, return_exceptions=True)
+        if foreign_futures:
+            await asyncio.gather(*foreign_futures, return_exceptions=True)
+
     # ------------------------------------------------------------------
     # Cleanup helpers
     # ------------------------------------------------------------------
@@ -189,6 +218,7 @@ class MCPSessionPool:
 
     async def close_scope(self, scope_key: str) -> None:
         """Close all sessions for a given scope (e.g. thread_id)."""
+        await self._cancel_pending_creations(scope_key=scope_key)
         with self._lock:
             keys = [k for k in self._entries if k[1] == scope_key]
             cms = [(k, self._context_managers.pop(k, None)) for k in keys]
@@ -200,6 +230,7 @@ class MCPSessionPool:
 
     async def close_server(self, server_name: str) -> None:
         """Close all sessions for a given server."""
+        await self._cancel_pending_creations(server_name=server_name)
         with self._lock:
             keys = [k for k in self._entries if k[0] == server_name]
             cms = [(k, self._context_managers.pop(k, None)) for k in keys]
@@ -211,6 +242,7 @@ class MCPSessionPool:
 
     async def close_all(self) -> None:
         """Close every managed session."""
+        await self._cancel_pending_creations()
         with self._lock:
             cms = list(self._context_managers.items())
             self._context_managers.clear()
@@ -225,11 +257,35 @@ class MCPSessionPool:
         cross-loop resource leaks.  Safe to call from any thread without an
         active event loop.
         """
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
         with self._lock:
+            pending_tasks = list(self._pending_creations.values())
+            self._pending_creations.clear()
             entries = list(self._entries.items())
             cms = dict(self._context_managers)
             self._entries.clear()
             self._context_managers.clear()
+
+        for task in pending_tasks:
+            if task.done():
+                continue
+            loop = task.get_loop()
+            if loop.is_closed():
+                continue
+            try:
+                if loop is current_loop:
+                    task.cancel()
+                elif loop.is_running():
+                    future = asyncio.run_coroutine_threadsafe(self._cancel_task(task), loop)
+                    future.result(timeout=self.SESSION_CLOSE_TIMEOUT)
+                else:
+                    loop.run_until_complete(self._cancel_task(task))
+            except Exception:
+                logger.debug("Error cancelling pending MCP session during sync close", exc_info=True)
 
         for key, (_, loop) in entries:
             cm = cms.get(key)

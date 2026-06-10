@@ -344,7 +344,7 @@ async def get_mcp_tools() -> list[BaseTool]:
         from langchain_mcp_adapters.client import MultiServerMCPClient
     except ImportError:
         logger.warning("langchain-mcp-adapters not installed. Install it to enable MCP tools: pip install langchain-mcp-adapters")
-        return []
+        raise
 
     # NOTE: We use ExtensionsConfig.from_file() instead of get_extensions_config()
     # to always read the latest configuration from disk. This ensures that changes
@@ -437,6 +437,6 @@ async def get_mcp_tools() -> list[BaseTool]:
 
         return wrapped_tools
 
-    except Exception as e:
-        logger.error(f"Failed to load MCP tools: {e}", exc_info=True)
-        return []
+    except Exception:
+        logger.exception("Failed to load MCP tools")
+        raise

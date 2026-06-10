@@ -18,10 +18,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from typing import Any
 from uuid import uuid4
-
 
 DEFAULT_QUESTIONS = (
     "我需要一个研发经理，帮从集团推荐一个瓷粉研发的人",
@@ -260,17 +259,7 @@ def main() -> int:
         print(f"thread_id: {args.thread_id}")
         for index, result in enumerate(results, start=1):
             print(f"\n[{index}] {result.question}")
-            print(
-                "status={status} headers={headers}ms first_byte={first}ms total={total}ms frames={frames} bytes={bytes} events={events}".format(
-                    status=result.status,
-                    headers=result.headers_ms,
-                    first=result.first_byte_ms,
-                    total=result.total_ms,
-                    frames=result.sse_frames,
-                    bytes=result.bytes_read,
-                    events=result.events,
-                )
-            )
+            print(f"status={result.status} headers={result.headers_ms}ms first_byte={result.first_byte_ms}ms total={result.total_ms}ms frames={result.sse_frames} bytes={result.bytes_read} events={result.events}")
             if result.error:
                 print(f"error={result.error}")
     return 0 if all(result.status in {"ok", "closed"} for result in results) else 1

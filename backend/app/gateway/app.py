@@ -60,6 +60,7 @@ async def _initialize_mcp_tools_before_channels() -> None:
         logger.info("MCP tools initialized before channel startup: %d tool(s)", len(tools))
     except Exception:
         logger.exception("MCP tool initialization failed before channel startup")
+        raise
 
 
 async def _ensure_admin_user(app: FastAPI) -> None:
