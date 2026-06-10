@@ -6,6 +6,13 @@ import sys
 from pathlib import Path
 
 
+TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def employee_query_enabled() -> bool:
+    return os.getenv("TEXT2CYPHER_EMPLOYEE_QUERY_ENABLED", "").strip().lower() in TRUE_ENV_VALUES
+
+
 def resolve_repo_root() -> tuple[Path, Path | None]:
     raw = os.getenv("TEXT2CYPHER_REPO", "D:/study/my-mcp/text2cypher")
     repo_root = Path(raw).expanduser().resolve()
@@ -35,6 +42,9 @@ def resolve_repo_root() -> tuple[Path, Path | None]:
 def run_packaged_server() -> None:
     from text2cypher.adapters.mcp.server import create_server
     from text2cypher.config import AppSettings
+    from text2cypher.core.employee_filter_resolver import EmployeeFilterResolver
+    from text2cypher.core.employee_query_builder import EmployeePresetCypherBuilder
+    from text2cypher.core.employee_query_service import EmployeePresetQueryService
     from text2cypher.core.engine import Text2CypherEngine
     from text2cypher.core.executor import CypherExecutor
     from text2cypher.core.generator import CypherGenerator
@@ -45,13 +55,23 @@ def run_packaged_server() -> None:
 
     settings = AppSettings.from_env()
     validator = CypherValidator(settings)
+    executor = CypherExecutor(settings, validator=validator)
+    employee_query_service = None
+    if employee_query_enabled():
+        employee_query_service = EmployeePresetQueryService(
+            resolver=EmployeeFilterResolver(executor=executor),
+            builder=EmployeePresetCypherBuilder(),
+            validator=validator,
+            executor=executor,
+        )
     engine = Text2CypherEngine(
         schema_service=SchemaService(settings),
         generator=CypherGenerator(settings),
         validator=validator,
-        executor=CypherExecutor(settings, validator=validator),
+        executor=executor,
         planner=SinglePassPlanner(settings),
         value_catalog_service=ValueCatalogService(settings),
+        employee_query_service=employee_query_service,
         total_timeout_seconds=settings.answer_timeout_seconds,
     )
     server = create_server(engine)

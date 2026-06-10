@@ -275,6 +275,7 @@ allowed_tools:
         "TEXT2CYPHER_OPENAI_API_KEY": "$DASHSCOPE_API_KEY",
         "TEXT2CYPHER_OPENAI_BASE_URL": "https://api.deepseek.com",
         "TEXT2CYPHER_OPENAI_MODEL": "deepseek-v4-pro",
+        "TEXT2CYPHER_EMPLOYEE_QUERY_ENABLED": "true",
         "TEXT2CYPHER_TRACE_ENABLED": "true"
       },
       "description": "Local Text2Cypher engine via MCP"
@@ -283,6 +284,10 @@ allowed_tools:
   "skills": {}
 }
 ```
+
+`TEXT2CYPHER_EMPLOYEE_QUERY_ENABLED=true` exposes `text2cypher_query_employees`.
+Disabling it removes only that preset employee-filtering tool; `text2cypher_answer_question`
+remains available.
 
 ### 8.2 Docker 部署示例
 
