@@ -2442,6 +2442,160 @@ class TestWeComChannel:
 
         _run(go())
 
+    def test_publish_ws_inbound_uses_group_chat_id_for_delivery(self, monkeypatch):
+        from app.channels.wecom import WeComChannel
+
+        async def go():
+            bus = MessageBus()
+            bus.publish_inbound = AsyncMock()
+            channel = WeComChannel(bus, config={})
+            channel._ws_client = SimpleNamespace(reply_stream=AsyncMock())
+
+            monkeypatch.setitem(
+                __import__("sys").modules,
+                "aibot",
+                SimpleNamespace(generate_req_id=lambda prefix: "stream-1"),
+            )
+
+            frame = {
+                "body": {
+                    "msgid": "msg-1",
+                    "chatid": "group-1",
+                    "from": {"userid": "user-1"},
+                    "chattype": "group",
+                }
+            }
+
+            await channel._publish_ws_inbound(frame, "hello")
+
+            inbound = bus.publish_inbound.await_args.args[0]
+            assert inbound.chat_id == "group-1"
+            assert inbound.user_id == "user-1"
+            assert inbound.topic_id == "user-1"
+
+        _run(go())
+
+    def test_stream_soft_timeout_finishes_original_stream(self, monkeypatch):
+        from app.channels.wecom import WeComChannel
+
+        async def go():
+            bus = MessageBus()
+            bus.publish_inbound = AsyncMock()
+            ws_client = SimpleNamespace(reply_stream=AsyncMock())
+            channel = WeComChannel(
+                bus,
+                config={
+                    "stream_soft_timeout_seconds": 0.01,
+                    "stream_timeout_message": "Still working; final result will follow.",
+                },
+            )
+            channel._ws_client = ws_client
+
+            monkeypatch.setitem(
+                __import__("sys").modules,
+                "aibot",
+                SimpleNamespace(generate_req_id=lambda prefix: "stream-1"),
+            )
+
+            frame = {
+                "body": {
+                    "msgid": "msg-1",
+                    "from": {"userid": "user-1"},
+                    "chattype": "single",
+                }
+            }
+
+            await channel._publish_ws_inbound(frame, "hello")
+            await asyncio.sleep(0.03)
+
+            assert ws_client.reply_stream.await_args_list[-1].args == (
+                frame,
+                "stream-1",
+                "Still working; final result will follow.",
+                True,
+            )
+            assert "msg-1" in channel._detached_streams
+            assert "msg-1" not in channel._ws_frames
+            assert "msg-1" not in channel._ws_stream_ids
+
+        _run(go())
+
+    def test_detached_stream_ignores_updates_and_sends_final_as_active_message(self):
+        from app.channels.wecom import WeComChannel
+
+        async def go():
+            bus = MessageBus()
+            ws_client = SimpleNamespace(send_message=AsyncMock())
+            channel = WeComChannel(bus, config={})
+            channel._ws_client = ws_client
+            channel._detached_streams.add("msg-1")
+
+            await channel._on_outbound(
+                OutboundMessage(
+                    channel_name="wecom",
+                    chat_id="group-1",
+                    thread_id="thread-1",
+                    text="partial",
+                    is_final=False,
+                    thread_ts="msg-1",
+                )
+            )
+            ws_client.send_message.assert_not_awaited()
+
+            await channel._on_outbound(
+                OutboundMessage(
+                    channel_name="wecom",
+                    chat_id="group-1",
+                    thread_id="thread-1",
+                    text="done",
+                    is_final=True,
+                    thread_ts="msg-1",
+                )
+            )
+
+            ws_client.send_message.assert_awaited_once_with(
+                "group-1",
+                {"msgtype": "markdown", "markdown": {"content": "done"}},
+            )
+            assert "msg-1" not in channel._detached_streams
+
+        _run(go())
+
+    def test_stream_send_failure_detaches_and_final_falls_back_to_active_message(self):
+        from app.channels.wecom import WeComChannel
+
+        async def go():
+            bus = MessageBus()
+            ws_client = SimpleNamespace(
+                reply_stream=AsyncMock(side_effect=RuntimeError("stream expired")),
+                send_message=AsyncMock(),
+            )
+            channel = WeComChannel(bus, config={})
+            channel._ws_client = ws_client
+            channel._ws_frames["msg-1"] = {"body": {"msgid": "msg-1"}}
+            channel._ws_stream_ids["msg-1"] = "stream-1"
+
+            await channel._on_outbound(
+                OutboundMessage(
+                    channel_name="wecom",
+                    chat_id="user-1",
+                    thread_id="thread-1",
+                    text="done",
+                    is_final=True,
+                    thread_ts="msg-1",
+                )
+            )
+
+            assert ws_client.reply_stream.await_count == 3
+            ws_client.send_message.assert_awaited_once_with(
+                "user-1",
+                {"msgtype": "markdown", "markdown": {"content": "done"}},
+            )
+            assert "msg-1" not in channel._detached_streams
+            assert "msg-1" not in channel._ws_frames
+
+        _run(go())
+
     def test_on_ws_feedback_event_logs_key_fields(self, caplog):
         from app.channels.wecom import WeComChannel
 

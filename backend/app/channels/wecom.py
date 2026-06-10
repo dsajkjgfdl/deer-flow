@@ -34,7 +34,17 @@ class WeComChannel(Channel):
         self._ws_task: asyncio.Task | None = None
         self._ws_frames: dict[str, dict[str, Any]] = {}
         self._ws_stream_ids: dict[str, str] = {}
+        self._ws_stream_timeout_tasks: dict[str, asyncio.Task[None]] = {}
+        self._detached_streams: set[str] = set()
         self._working_message = "Working on it..."
+        timeout = config.get("stream_soft_timeout_seconds", 0)
+        self._stream_soft_timeout_seconds = float(timeout) if isinstance(timeout, (int, float)) and timeout > 0 else 0.0
+        timeout_message = config.get("stream_timeout_message")
+        self._stream_timeout_message = (
+            timeout_message
+            if isinstance(timeout_message, str) and timeout_message
+            else "This task is taking longer than expected. The final result will be sent separately."
+        )
         self._feedback_repo = config.get("feedback_repo")
 
     @property
@@ -44,8 +54,50 @@ class WeComChannel(Channel):
     def _clear_ws_context(self, thread_ts: str | None) -> None:
         if not thread_ts:
             return
+        timeout_task = self._ws_stream_timeout_tasks.pop(thread_ts, None)
+        if timeout_task is not None and timeout_task is not asyncio.current_task():
+            timeout_task.cancel()
         self._ws_frames.pop(thread_ts, None)
         self._ws_stream_ids.pop(thread_ts, None)
+        self._detached_streams.discard(thread_ts)
+
+    def _detach_ws_stream(self, thread_ts: str | None) -> None:
+        if not thread_ts:
+            return
+        timeout_task = self._ws_stream_timeout_tasks.pop(thread_ts, None)
+        if timeout_task is not None and timeout_task is not asyncio.current_task():
+            timeout_task.cancel()
+        self._ws_frames.pop(thread_ts, None)
+        self._ws_stream_ids.pop(thread_ts, None)
+        self._detached_streams.add(thread_ts)
+
+    def _schedule_ws_stream_timeout(self, thread_ts: str) -> None:
+        if self._stream_soft_timeout_seconds <= 0:
+            return
+        previous = self._ws_stream_timeout_tasks.pop(thread_ts, None)
+        if previous is not None:
+            previous.cancel()
+        self._ws_stream_timeout_tasks[thread_ts] = asyncio.create_task(self._finish_ws_stream_after_timeout(thread_ts))
+
+    async def _finish_ws_stream_after_timeout(self, thread_ts: str) -> None:
+        try:
+            await asyncio.sleep(self._stream_soft_timeout_seconds)
+            frame = self._ws_frames.get(thread_ts)
+            stream_id = self._ws_stream_ids.get(thread_ts)
+            if not self._ws_client or not frame or not stream_id:
+                return
+
+            self._detach_ws_stream(thread_ts)
+            try:
+                await self._ws_client.reply_stream(frame, stream_id, self._stream_timeout_message, True)
+            except Exception:
+                logger.warning("[WeCom] failed to finish stream at soft timeout: msg_id=%s", thread_ts, exc_info=True)
+        except asyncio.CancelledError:
+            return
+        finally:
+            current = self._ws_stream_timeout_tasks.get(thread_ts)
+            if current is asyncio.current_task():
+                self._ws_stream_timeout_tasks.pop(thread_ts, None)
 
     def _get_feedback_repo(self):
         if self._feedback_repo is not None:
@@ -123,8 +175,12 @@ class WeComChannel(Channel):
             except Exception:
                 pass
         self._ws_client = None
+        for timeout_task in self._ws_stream_timeout_tasks.values():
+            timeout_task.cancel()
+        self._ws_stream_timeout_tasks.clear()
         self._ws_frames.clear()
         self._ws_stream_ids.clear()
+        self._detached_streams.clear()
         logger.info("WeCom channel stopped")
 
     async def send(self, msg: OutboundMessage, *, _max_retries: int = 3) -> None:
@@ -437,15 +493,17 @@ class WeComChannel(Channel):
 
         user_id = (body.get("from") or {}).get("userid")
 
+        chattype = body.get("chattype")
+        platform_chat_id = body.get("chatid") if chattype == "group" else user_id
         inbound_type = InboundMessageType.COMMAND if text.startswith("/") else InboundMessageType.CHAT
         inbound = self._make_inbound(
-            chat_id=user_id,  # keep user's conversation in memory
+            chat_id=platform_chat_id,
             user_id=user_id,
             text=text,
             msg_type=inbound_type,
             thread_ts=msg_id,
             files=files or [],
-            metadata={"aibotid": body.get("aibotid"), "chattype": body.get("chattype")},
+            metadata={"aibotid": body.get("aibotid"), "chattype": chattype},
         )
         inbound.topic_id = user_id  # keep the same thread
 
@@ -471,20 +529,28 @@ class WeComChannel(Channel):
             )
             await self._upsert_feedback_target(
                 native_feedback_id=feedback_id,
-                chat_id=user_id if isinstance(user_id, str) else None,
+                chat_id=platform_chat_id if isinstance(platform_chat_id, str) else None,
                 platform_user_id=user_id if isinstance(user_id, str) else None,
                 platform_message_id=str(msg_id),
                 thread_id=None,
                 run_id=None,
             )
+            self._schedule_ws_stream_timeout(str(msg_id))
         except Exception:
-            pass
+            logger.warning("[WeCom] initial stream reply failed; using active-message fallback: msg_id=%s", msg_id, exc_info=True)
+            self._detach_ws_stream(str(msg_id))
 
         await self.bus.publish_inbound(inbound)
 
     async def _send_ws(self, msg: OutboundMessage, *, _max_retries: int = 3) -> None:
         if not self._ws_client:
             return
+        if msg.thread_ts and msg.thread_ts in self._detached_streams:
+            if not msg.is_final:
+                return
+            await self._send_active_message(msg, _max_retries=_max_retries)
+            return
+
         try:
             from aibot import generate_req_id
         except Exception:
@@ -510,10 +576,24 @@ class WeComChannel(Channel):
                     if attempt < _max_retries - 1:
                         await asyncio.sleep(2**attempt)
             if last_exc:
-                raise last_exc
+                logger.warning(
+                    "[WeCom] stream reply failed; switching to active-message fallback: msg_id=%s",
+                    msg.thread_ts,
+                    exc_info=last_exc,
+                )
+                self._detach_ws_stream(msg.thread_ts)
+                if not msg.is_final:
+                    return
+                await self._send_active_message(msg, _max_retries=_max_retries)
+                return
 
+        await self._send_active_message(msg, _max_retries=_max_retries)
+
+    async def _send_active_message(self, msg: OutboundMessage, *, _max_retries: int) -> None:
+        if not self._ws_client:
+            return
         body = {"msgtype": "markdown", "markdown": {"content": msg.text}}
-        last_exc = None
+        last_exc: Exception | None = None
         for attempt in range(_max_retries):
             try:
                 await self._ws_client.send_message(msg.chat_id, body)

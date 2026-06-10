@@ -1063,6 +1063,10 @@ run_events:
 #     enabled: false
 #     bot_id: $WECOM_BOT_ID
 #     bot_secret: $WECOM_BOT_SECRET
+#     # Finish the original stream before WeCom's hard limit, then actively
+#     # send the final result when the agent completes. Set to 0 to disable.
+#     stream_soft_timeout_seconds: 480
+#     stream_timeout_message: This task is taking longer than expected. The final result will be sent separately.
 #
 #   dingtalk:
 #     enabled: false
