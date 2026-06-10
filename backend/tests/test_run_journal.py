@@ -459,6 +459,47 @@ class TestConvenienceFields:
         assert data["last_ai_message"] == "Answer"
 
     @pytest.mark.anyio
+    async def test_display_as_assistant_tool_message_updates_last_ai_message(self, journal_setup):
+        from langchain_core.messages import ToolMessage
+
+        j, _ = journal_setup
+        j.on_tool_end(
+            ToolMessage(
+                content="Fast-path answer",
+                tool_call_id="call_1",
+                name="recommendation",
+                additional_kwargs={"display_as_assistant": True},
+            ),
+            run_id=uuid4(),
+        )
+
+        assert j.get_completion_data()["last_ai_message"] == "Fast-path answer"
+
+    @pytest.mark.anyio
+    async def test_display_as_assistant_tool_message_in_command_updates_last_ai_message(self, journal_setup):
+        from langchain_core.messages import ToolMessage
+        from langgraph.types import Command
+
+        j, _ = journal_setup
+        j.on_tool_end(
+            Command(
+                update={
+                    "messages": [
+                        ToolMessage(
+                            content="Command fast-path answer",
+                            tool_call_id="call_1",
+                            name="recommendation",
+                            additional_kwargs={"display_as_assistant": True},
+                        )
+                    ]
+                }
+            ),
+            run_id=uuid4(),
+        )
+
+        assert j.get_completion_data()["last_ai_message"] == "Command fast-path answer"
+
+    @pytest.mark.anyio
     async def test_tool_call_only_ai_does_not_clear_last_ai_message(self, journal_setup):
         j, _ = journal_setup
         j.on_llm_end(_make_llm_response("Useful answer"), run_id=uuid4(), parent_run_id=None, tags=["lead_agent"])

@@ -132,10 +132,12 @@ class RunJournal(BaseCallbackHandler):
         self._msg_count += 1
 
         # ``last_ai_message`` should represent the lead agent's user-facing
-        # answer. Middleware/subagent model calls and empty tool-call-only
-        # AI messages must not overwrite the last useful assistant text.
+        # answer. Some return-direct paths use a ToolMessage explicitly marked
+        # for assistant display; ordinary tool results must remain excluded.
         is_ai_message = isinstance(message, AIMessage) or getattr(message, "type", None) == "ai"
-        if is_ai_message and (caller is None or caller == "lead_agent"):
+        additional_kwargs = getattr(message, "additional_kwargs", None)
+        displays_as_assistant = isinstance(message, ToolMessage) and isinstance(additional_kwargs, Mapping) and additional_kwargs.get("display_as_assistant") is True
+        if (is_ai_message or displays_as_assistant) and (caller is None or caller == "lead_agent"):
             text = self._message_text(message).strip()
             if text:
                 self._last_ai_msg = text[:2000]
