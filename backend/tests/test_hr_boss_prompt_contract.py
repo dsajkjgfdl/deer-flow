@@ -72,7 +72,7 @@ def test_department_distribution_groups_by_org_unit_center_name():
 def test_hr_boss_uses_single_pass_contract_without_agent_retries():
     skill = (REPO_ROOT.parent / "skills" / "custom" / "hr-boss" / "SKILL.md").read_text(encoding="utf-8")
 
-    assert "一轮最多调用一次 `text2cypher_answer_question`" in skill
+    assert "一轮最多调用一个 Text2Cypher 工具" in skill
     assert "不得自行拆分问题并发查询" in skill
     assert "`assumptions`" in skill
     assert "`risk_level=high`" in skill
@@ -83,7 +83,8 @@ def test_recommendation_questions_use_text2cypher_fast_path_before_graphrag():
 
     assert "人岗匹配与推荐快路径" in skill
     assert "研发经理" in skill
-    assert "首轮必须先调用 `text2cypher_answer_question`" in skill
+    assert "明确给出预设维度筛选条件时可使用 `text2cypher_query_employees`" in skill
+    assert "自由文本匹配、综合评分或模糊适配判断时使用 `text2cypher_answer_question`" in skill
     assert "当前这一轮不要调用任何 GraphRAG" in skill
     assert "直接基于 Text2Cypher 返回的候选明细回答" in skill
     assert "最多前 3 位" in skill
@@ -125,3 +126,27 @@ def test_hr_boss_recommendation_fast_path_prompt_loads_rules_without_read_file()
     assert "Do not call `read_file`" in prompt
     assert "immediately call `read_file` on the skill's main file" not in prompt
     assert "Skill First: Always load the relevant skill" not in prompt
+
+
+def test_hr_boss_defines_dual_text2cypher_tool_routing():
+    config = (
+        REPO_ROOT / ".deer-flow" / "agents" / "hr-boss-agent" / "config.yaml"
+    ).read_text(encoding="utf-8")
+    skill = (REPO_ROOT.parent / "skills" / "custom" / "hr-boss" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    profile = (
+        REPO_ROOT
+        / ".deer-flow"
+        / "agents"
+        / "hr-boss-agent"
+        / "text2cypher-profile.md"
+    ).read_text(encoding="utf-8")
+
+    assert "- text2cypher_query_employees" in config
+    assert "员工名单、员工筛选或明确候选集合" in skill
+    assert "人数、平均值、占比、排名、分组或分布" in skill
+    assert "一轮最多调用一个 Text2Cypher 工具" in skill
+    assert "不得自动改用 `text2cypher_answer_question`" in skill
+    assert "绩效只匹配最近一期" in profile
+    assert "项目匹配全部项目经历" in profile

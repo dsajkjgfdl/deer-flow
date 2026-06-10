@@ -16,17 +16,21 @@ description: 当 hr-boss-agent 面向领导回答任何 HR 问题时，尤其是
 ## 路由总则
 
 - Text2Cypher 负责精确问题。凡是平均、人数、名单、排名、占比、筛选、年龄、工龄、职称、证书、人员清单、部门清单这类问题，优先使用 Text2Cypher。
-- Text2Cypher 在本 agent 中只有一个合法入口：`text2cypher_answer_question`。低层 Cypher 生成、校验和执行工具属于评测或排障通道，不属于面向领导问答的可用工具。
+- Text2Cypher 在本 agent 中有两个公开入口：明确条件的员工名单筛选使用 `text2cypher_query_employees`，其他精确问答使用 `text2cypher_answer_question`。低层 Cypher 生成、校验和执行工具属于评测或排障通道，不属于面向领导问答的可用工具。
 - GraphRAG basic 负责简单证据片段查找，调用 `hr-graphrag-qa_query_basic`。
 - GraphRAG local 负责具体人、具体岗位、具体部门、具体公司、具体项目等实体问题，调用 `hr-graphrag-qa_query_local`。
 - GraphRAG global 负责组织画像、人才结构、群体趋势、整体风险、跨部门分布，调用 `hr-graphrag-qa_query_global`。
 - GraphRAG drift 负责探索式、跨群体、从整体追到局部的线索发现，调用 `hr-graphrag-qa_query_drift`。
 
-## Text2Cypher 单入口
+## Text2Cypher 双工具路由
 
-普通领导问答只调用 `text2cypher_answer_question`，拿到精确答案后转写成面向领导的结论。不得请求或依赖调试字段，不得在本 agent 中展示原始 Cypher、schema、raw output 或内部校验结果。
+用户需要员工名单、员工筛选或明确候选集合，且筛选条件只涉及职称、部门、岗位、子公司、专业、项目、绩效或学校时，调用 `text2cypher_query_employees`。从返回结果的 `employees` 读取员工卡片，从 `scope` 说明采用范围，从 `selected_values` 说明实际匹配值。
 
-一轮最多调用一次 `text2cypher_answer_question`。不得自行拆分问题并发查询，不得因为结果不符合预期而改写问题重复调用。工具内部已经完成单次查询规划、必要时的一次校验修复和总耗时控制。
+用户需要人数、平均值、占比、排名、分组或分布，或问题涉及因果判断、自由文本分析、不支持的筛选条件时，调用 `text2cypher_answer_question`。具体人员线索查询也继续使用 `text2cypher_answer_question`。
+
+一轮最多调用一个 Text2Cypher 工具。不得自行拆分问题并发查询，不得因为结果不符合预期而改写问题重复调用。`text2cypher_query_employees` 返回非 `success` 状态时，必须按 `limitation` 解释或澄清，不得自动改用 `text2cypher_answer_question`。
+
+两个公开工具的结果都不得请求或依赖调试字段，不得在本 agent 中展示原始 Cypher、schema、raw output 或内部校验结果。
 
 如果用户明确要求查看、验证、调试或解释 Cypher，说明当前领导问答模式不展示底层查询，可提供统计口径、结果限制和需要走调试通道的说明；不要尝试调用低层 Text2Cypher 工具。
 
@@ -42,7 +46,7 @@ description: 当 hr-boss-agent 面向领导回答任何 HR 问题时，尤其是
 
 ## 人岗匹配与推荐快路径
 
-当用户提出“帮我推荐人”“找合适候选人”“我需要一个研发经理”“从集团推荐一个瓷粉研发的人”“匹配某岗位/方向的人才”等人岗匹配或候选人推荐问题时，首轮目标是先拿到可筛选、可排序、可解释的候选人名单。这类问题首轮必须先调用 `text2cypher_answer_question`，不要先做开放式材料探索。
+当用户提出“帮我推荐人”“找合适候选人”“我需要一个研发经理”“从集团推荐一个瓷粉研发的人”“匹配某岗位/方向的人才”等人岗匹配或候选人推荐问题时，首轮目标是先拿到可筛选、可排序、可解释的候选人名单。用户明确给出预设维度筛选条件时可使用 `text2cypher_query_employees`；需要自由文本匹配、综合评分或模糊适配判断时使用 `text2cypher_answer_question`。不要先做开放式材料探索。
 
 如果原始问题已经包含“集团”“全集团”“全部公司”“所有当前员工”等全局范围表达，视为用户已确认按全集团/全部当前员工查找候选人，不再因为缺少具体公司名而首轮追问公司口径。传给 Text2Cypher 的问题应保留原始岗位、专业方向、产品方向、管理层级和范围，并将 `max_rows=5`，例如“在所有当前员工中，推荐适合研发经理、瓷粉研发方向的候选人，返回姓名、当前组织、部门、岗位、职称、教育或项目等可用依据，优先给 Top 5”。
 
@@ -78,7 +82,7 @@ Text2Cypher 的具体业务口径以 Text2Cypher MCP 加载的 HR Boss profile �
 | 问题 | 首选工具 | 原因 |
 | --- | --- | --- |
 | 福建火炬电子科技股份有限公司平均年龄是多少？ | `text2cypher_answer_question` | 平均年龄需要精确聚合，GraphRAG 不能凭材料印象估算。 |
-| 福建火炬电子科技股份有限公司的高级工程师有哪些？ | `text2cypher_answer_question` | 高级工程师名单需要完整筛选，必须以结构化图查询为准。 |
+| 福建火炬电子科技股份有限公司的高级工程师有哪些？ | `text2cypher_query_employees` | 这是明确子公司和职称条件下的员工名单筛选。 |
 | 请展示“高级工程师人数”这道题的 Cypher 并验证结果 | 不调用低层工具 | 当前 agent 是领导问答模式，不展示底层查询；可说明需要进入独立调试通道。 |
 | 老王1366的教育和项目经历是什么？ | `hr-graphrag-qa_query_local` | 这是具体人员档案和证据关联问题。 |
 | 福建火炬电子科技股份有限公司的人才结构有什么特点？ | `hr-graphrag-qa_query_global` | 这是整体画像和群体结构总结问题。 |

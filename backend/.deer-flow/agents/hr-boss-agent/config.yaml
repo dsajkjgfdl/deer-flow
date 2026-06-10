@@ -11,6 +11,7 @@ mcp_servers:
   - text2cypher
 allowed_tools:
   - ask_clarification
+  - text2cypher_query_employees
   - text2cypher_answer_question
   - hr-graphrag-qa_query_basic
   - hr-graphrag-qa_query_local

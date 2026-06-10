@@ -74,3 +74,46 @@ def test_get_available_tools_filters_allowed_tools_before_deferred_registration(
     assert registry is None
 
     reset_deferred_registry()
+
+
+def test_get_available_tools_keeps_both_public_text2cypher_tools(monkeypatch):
+    from deerflow.config.tool_search_config import ToolSearchConfig
+    from deerflow.tools.tools import get_available_tools
+
+    mcp_tools = [
+        SimpleNamespace(name="text2cypher_query_employees", description="Filter employees"),
+        SimpleNamespace(name="text2cypher_answer_question", description="Answer HR questions"),
+        SimpleNamespace(name="text2cypher_execute_cypher", description="Execute raw Cypher"),
+    ]
+    app_config = SimpleNamespace(
+        tools=[],
+        models=[],
+        tool_search=ToolSearchConfig(enabled=False),
+        skill_evolution=SimpleNamespace(enabled=False),
+        acp_agents={},
+    )
+    monkeypatch.setattr(
+        "deerflow.config.extensions_config.ExtensionsConfig.from_file",
+        classmethod(
+            lambda cls: SimpleNamespace(
+                get_enabled_mcp_servers=lambda: {"text2cypher": object()}
+            )
+        ),
+    )
+    monkeypatch.setattr("deerflow.mcp.cache.get_cached_mcp_tools", lambda: mcp_tools)
+
+    tools = get_available_tools(
+        app_config=app_config,
+        mcp_servers=["text2cypher"],
+        allowed_tools=[
+            "ask_clarification",
+            "text2cypher_query_employees",
+            "text2cypher_answer_question",
+        ],
+    )
+
+    assert [tool.name for tool in tools] == [
+        "ask_clarification",
+        "text2cypher_query_employees",
+        "text2cypher_answer_question",
+    ]

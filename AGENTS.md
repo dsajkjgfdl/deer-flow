@@ -54,11 +54,12 @@ hr-boss orchestration skill
 
 `text2cypher` MCP 负责结构化 HR 图谱的精确查询。遇到平均、人数、名单、排名、占比、筛选、年龄、工龄、职称清单、证书清单、人员清单、部门人数、公司人数等问题时，优先走 Text2Cypher。
 
-常规领导问答优先调用：
+常规领导问答公开两个 Text2Cypher 工具：
 
-- `text2cypher_answer_question`
+- `text2cypher_query_employees`：按职称、部门、岗位、子公司、专业、项目、绩效、学校等明确条件返回员工名单和匹配证据。
+- `text2cypher_answer_question`：处理人数、平均值、占比、排名、分组、分布、自由分析和不支持的筛选条件。
 
-`hr-boss-agent` 的领导问答模式只暴露 `text2cypher_answer_question`。需要查看、验证、修复或解释查询口径时，应使用独立评测或排障通道中的低层工具链，而不是由 `hr-boss-agent` 直接调用：
+`hr-boss-agent` 每轮最多调用一个 Text2Cypher 工具。需要查看、验证、修复或解释查询口径时，应使用独立评测或排障通道中的低层工具链，而不是由 `hr-boss-agent` 直接调用：
 
 - `text2cypher_prepare_schema`
 - `text2cypher_get_schema`
