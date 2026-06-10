@@ -83,7 +83,7 @@ def main() -> None:
     repo_path = str(repo_root)
     if repo_path not in sys.path:
         sys.path.insert(0, repo_path)
-    if script_path is not None:
+    if script_path is not None and not employee_query_enabled():
         runpy.run_path(str(script_path), run_name="__main__")
         return
     run_packaged_server()

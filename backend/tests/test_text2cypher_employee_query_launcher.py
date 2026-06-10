@@ -35,3 +35,18 @@ def test_hr_boss_text2cypher_configs_enable_employee_query() -> None:
             config["mcpServers"]["text2cypher"]["env"]["TEXT2CYPHER_EMPLOYEE_QUERY_ENABLED"]
             == "true"
         )
+
+
+def test_main_uses_packaged_server_when_employee_query_is_enabled(monkeypatch, tmp_path) -> None:
+    external_launcher = tmp_path / "scripts" / "run_text2cypher_mcp.py"
+    external_launcher.parent.mkdir()
+    external_launcher.write_text("raise AssertionError('must not delegate')", encoding="utf-8")
+    calls = []
+    monkeypatch.setenv("TEXT2CYPHER_REPO", str(tmp_path))
+    monkeypatch.setenv("TEXT2CYPHER_EMPLOYEE_QUERY_ENABLED", "true")
+    monkeypatch.setattr(launcher, "run_packaged_server", lambda: calls.append("packaged"))
+    monkeypatch.setattr(launcher.runpy, "run_path", lambda *_args, **_kwargs: calls.append("external"))
+
+    launcher.main()
+
+    assert calls == ["packaged"]
