@@ -688,7 +688,10 @@ def get_hr_boss_recommendation_fast_path_prompt_section(*, app_config: AppConfig
     if not section:
         section = (
             "## 人岗匹配与推荐快路径\n"
-            "首轮直接调用 `text2cypher_answer_question`，不要调用 GraphRAG 或 `read_file`。"
+            "明确给出职称、部门、岗位、子公司、专业、项目、绩效或学校筛选条件，"
+            "并要求员工名单时，调用 `text2cypher_query_employees`。"
+            "需要自由文本推荐、综合评分或不属于预设维度时，调用 "
+            "`text2cypher_answer_question`。不要调用 GraphRAG 或 `read_file`。"
         )
 
     return f"""<hr_boss_recommendation_fast_path>

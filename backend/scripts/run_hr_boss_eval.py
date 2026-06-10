@@ -20,9 +20,11 @@ TRACK_CHOICES = DEFAULT_TRACKS + ("boss.e2e", "term_resolution.strict")
 DEFAULT_CUSTOM_TRACK_MCP_SERVERS = ["text2cypher", "hr-graphrag-qa"]
 TEXT2CYPHER_SERVER = "text2cypher"
 TEXT2CYPHER_ANSWER_TOOL = "text2cypher_answer_question"
+TEXT2CYPHER_EMPLOYEE_QUERY_TOOL = "text2cypher_query_employees"
 XIYAN_TEXT2SQL_SERVER = "xiyan-text2sql"
 XIYAN_TEXT2SQL_ANSWER_TOOL = f"{XIYAN_TEXT2SQL_SERVER}_answer_question"
 TEXT2CYPHER_FAST_ROUTE = [TEXT2CYPHER_ANSWER_TOOL]
+TEXT2CYPHER_EMPLOYEE_ROUTE = [TEXT2CYPHER_EMPLOYEE_QUERY_TOOL]
 TEXT2CYPHER_TERM_ROUTE = ["text2cypher_resolve_terms"]
 TEXT2CYPHER_LOW_LEVEL_ROUTE = [
     "text2cypher_prepare_schema",
@@ -105,7 +107,7 @@ def expected_routes_for(track: str) -> list[list[str]]:
     if track == "graphrag.logic":
         return [[route] for route in GRAPHRAG_ROUTES]
     if track == "boss.e2e":
-        return TEXT2CYPHER_ROUTES + [[route] for route in GRAPHRAG_ROUTES]
+        return TEXT2CYPHER_ROUTES + [TEXT2CYPHER_EMPLOYEE_ROUTE] + [[route] for route in GRAPHRAG_ROUTES]
     return []
 
 

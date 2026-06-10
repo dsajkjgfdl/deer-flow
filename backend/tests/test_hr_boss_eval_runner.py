@@ -187,6 +187,14 @@ def test_xiyan_runner_supports_legacy_mcp_cache_signature(monkeypatch):
     assert runner._get_tool() is tool
 
 
+def test_boss_e2e_accepts_employee_query_route_but_strict_tracks_do_not():
+    employee_route = ["text2cypher_query_employees"]
+
+    assert employee_route in run_hr_boss_eval.expected_routes_for("boss.e2e")
+    assert employee_route not in run_hr_boss_eval.expected_routes_for("text2cypher.strict")
+    assert employee_route not in run_hr_boss_eval.expected_routes_for("term_resolution.strict")
+
+
 def test_main_cleans_up_mcp_resources_when_run_records_raises(monkeypatch, tmp_path):
     cleanup_events = []
 

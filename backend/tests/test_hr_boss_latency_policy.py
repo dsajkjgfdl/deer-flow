@@ -8,6 +8,7 @@ def test_hr_boss_recommendation_fast_path_removes_slow_graphrag_tools():
 
     tools = [
         SimpleNamespace(name="ask_clarification"),
+        SimpleNamespace(name="text2cypher_query_employees"),
         SimpleNamespace(name="text2cypher_answer_question"),
         SimpleNamespace(name="hr-graphrag-qa_query_basic"),
         SimpleNamespace(name="hr-graphrag-qa_query_local"),
@@ -23,8 +24,26 @@ def test_hr_boss_recommendation_fast_path_removes_slow_graphrag_tools():
 
     assert [tool.name for tool in filtered] == [
         "ask_clarification",
+        "text2cypher_query_employees",
         "text2cypher_answer_question",
     ]
+
+
+def test_hr_boss_recommendation_fallback_prompt_names_both_text2cypher_tools(monkeypatch):
+    from deerflow.agents.lead_agent import prompt
+
+    monkeypatch.setattr(
+        prompt,
+        "_get_hr_boss_recommendation_fast_path_skill_section",
+        lambda **_kwargs: "",
+    )
+
+    section = prompt.get_hr_boss_recommendation_fast_path_prompt_section()
+
+    assert "`text2cypher_query_employees`" in section
+    assert "`text2cypher_answer_question`" in section
+    assert "明确给出" in section
+    assert "自由文本推荐" in section
 
 
 def test_hr_boss_recommendation_filter_preserves_other_agents():
