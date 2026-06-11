@@ -129,6 +129,33 @@ def _schedule_shared_mcp_sessions_prewarm(servers_config: Mapping[str, dict[str,
     task.add_done_callback(_log_failure)
 
 
+def _schedule_session_rewarm(
+    pool: Any,
+    server_name: str,
+    scope_key: str,
+    connection: dict[str, Any],
+) -> None:
+    if server_name not in _SHARED_SESSION_MCP_SERVERS:
+        return
+
+    task = asyncio.create_task(
+        pool.get_session(server_name, scope_key, connection),
+        name=f"shared-mcp-session-rewarm:{server_name}",
+    )
+    _BACKGROUND_PREWARM_TASKS.add(task)
+
+    def _log_failure(done: asyncio.Task) -> None:
+        _BACKGROUND_PREWARM_TASKS.discard(done)
+        if done.cancelled():
+            return
+        try:
+            done.result()
+        except Exception:
+            logger.warning("Shared MCP session rewarm failed for %s", server_name, exc_info=True)
+
+    task.add_done_callback(_log_failure)
+
+
 def _truncate_audit_error(error: str | None) -> str | None:
     if error is None:
         return None
@@ -262,6 +289,8 @@ def _make_session_pool_tool(
         runtime: Runtime | None = None,
         **arguments: Any,
     ) -> Any:
+        scope_key = _session_scope_key(server_name, runtime)
+
         async def call_with_session(session: Any) -> Any:
             from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 
@@ -289,7 +318,7 @@ def _make_session_pool_tool(
             else:
                 call_tool_result = await session.call_tool(original_name, arguments)
 
-            return _convert_call_tool_result(call_tool_result)
+            return call_tool_result
 
         start = time.perf_counter()
         status = "success"
@@ -300,11 +329,19 @@ def _make_session_pool_tool(
 
                 async with create_session(connection) as session:
                     await session.initialize()
-                    return await call_with_session(session)
+                    return _convert_call_tool_result(await call_with_session(session))
 
-            scope_key = _session_scope_key(server_name, runtime)
             session = await pool.get_session(server_name, scope_key, connection)
-            return await call_with_session(session)
+            try:
+                call_tool_result = await call_with_session(session)
+            except Exception:
+                await pool.invalidate(server_name, scope_key)
+                _schedule_session_rewarm(pool, server_name, scope_key, connection)
+                raise
+            if getattr(call_tool_result, "isError", False):
+                await pool.invalidate(server_name, scope_key)
+                _schedule_session_rewarm(pool, server_name, scope_key, connection)
+            return _convert_call_tool_result(call_tool_result)
         except Exception as exc:
             status = "error"
             error = str(exc)

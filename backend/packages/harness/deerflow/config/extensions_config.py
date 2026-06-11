@@ -2,6 +2,7 @@
 
 import json
 import os
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -43,9 +44,18 @@ class McpServerConfig(BaseModel):
     env: dict[str, str] = Field(default_factory=dict, description="Environment variables for the MCP server")
     url: str | None = Field(default=None, description="URL of the MCP server (for sse or http type)")
     headers: dict[str, str] = Field(default_factory=dict, description="HTTP headers to send (for sse or http type)")
+    timeout: float | None = Field(default=None, gt=0, description="HTTP request timeout in seconds")
+    sse_read_timeout: float | None = Field(default=None, gt=0, description="HTTP SSE read timeout in seconds")
+    read_timeout_seconds: float | None = Field(default=None, gt=0, description="Maximum time to wait for an MCP response")
     oauth: McpOAuthConfig | None = Field(default=None, description="OAuth configuration (for sse or http type)")
     description: str = Field(default="", description="Human-readable description of what this MCP server provides")
     model_config = ConfigDict(extra="allow")
+
+    def session_kwargs(self) -> dict[str, Any]:
+        """Build MCP ClientSession keyword arguments."""
+        if self.read_timeout_seconds is None:
+            return {}
+        return {"read_timeout_seconds": timedelta(seconds=self.read_timeout_seconds)}
 
 
 class SkillStateConfig(BaseModel):

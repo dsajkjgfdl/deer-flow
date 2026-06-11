@@ -41,6 +41,9 @@ class McpServerConfigResponse(BaseModel):
     env: dict[str, str] = Field(default_factory=dict, description="Environment variables for the MCP server")
     url: str | None = Field(default=None, description="URL of the MCP server (for sse or http type)")
     headers: dict[str, str] = Field(default_factory=dict, description="HTTP headers to send (for sse or http type)")
+    timeout: float | None = Field(default=None, gt=0, description="HTTP request timeout in seconds")
+    sse_read_timeout: float | None = Field(default=None, gt=0, description="HTTP SSE read timeout in seconds")
+    read_timeout_seconds: float | None = Field(default=None, gt=0, description="Maximum time to wait for an MCP response")
     oauth: McpOAuthConfigResponse | None = Field(default=None, description="OAuth configuration for MCP HTTP/SSE servers")
     description: str = Field(default="", description="Human-readable description of what this MCP server provides")
 

@@ -4,12 +4,18 @@
       "enabled": true,
       "type": "http",
       "url": "http://hr-graphrag-mcp:8000/mcp",
+      "timeout": 30,
+      "sse_read_timeout": 210,
+      "read_timeout_seconds": 200,
       "description": "HR GraphRAG QA via independent HTTP MCP service"
     },
     "text2cypher": {
       "enabled": true,
       "type": "http",
       "url": "http://text2cypher-mcp:8000/mcp",
+      "timeout": 30,
+      "sse_read_timeout": 90,
+      "read_timeout_seconds": 60,
       "description": "Text2Cypher engine via independent HTTP MCP service"
     }
   },

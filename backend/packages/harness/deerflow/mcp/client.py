@@ -33,9 +33,14 @@ def build_server_params(server_name: str, config: McpServerConfig) -> dict[str, 
         if not config.url:
             raise ValueError(f"MCP server '{server_name}' with {transport_type} transport requires 'url' field")
         params["url"] = config.url
-        # Add headers if present
         if config.headers:
             params["headers"] = config.headers
+        if config.timeout is not None:
+            params["timeout"] = config.timeout
+        if config.sse_read_timeout is not None:
+            params["sse_read_timeout"] = config.sse_read_timeout
+        if session_kwargs := config.session_kwargs():
+            params["session_kwargs"] = session_kwargs
     else:
         raise ValueError(f"MCP server '{server_name}' has unsupported transport type: {transport_type}")
 

@@ -101,12 +101,18 @@ def test_hr_boss_docker_mcp_config_uses_http_services() -> None:
         "enabled": True,
         "type": "http",
         "url": "http://text2cypher-mcp:8000/mcp",
+        "timeout": 30,
+        "sse_read_timeout": 90,
+        "read_timeout_seconds": 60,
         "description": "Text2Cypher engine via independent HTTP MCP service",
     }
     assert config["mcpServers"]["hr-graphrag-qa"] == {
         "enabled": True,
         "type": "http",
         "url": "http://hr-graphrag-mcp:8000/mcp",
+        "timeout": 30,
+        "sse_read_timeout": 210,
+        "read_timeout_seconds": 200,
         "description": "HR GraphRAG QA via independent HTTP MCP service",
     }
 
@@ -117,5 +123,8 @@ def test_hr_boss_compose_runs_independent_http_mcp_services() -> None:
 
     assert services["text2cypher-mcp"]["environment"]["MCP_TRANSPORT"] == "streamable-http"
     assert services["hr-graphrag-mcp"]["environment"]["MCP_TRANSPORT"] == "streamable-http"
+    assert services["hr-graphrag-mcp"]["environment"]["GRAPHRAG_GLOBAL_PRIMARY_TIMEOUT_SECONDS"] == "${GRAPHRAG_GLOBAL_PRIMARY_TIMEOUT_SECONDS:-120}"
+    assert services["hr-graphrag-mcp"]["environment"]["GRAPHRAG_GLOBAL_FALLBACK_TIMEOUT_SECONDS"] == "${GRAPHRAG_GLOBAL_FALLBACK_TIMEOUT_SECONDS:-45}"
+    assert services["hr-graphrag-mcp"]["environment"]["GRAPHRAG_GLOBAL_TOTAL_TIMEOUT_SECONDS"] == "${GRAPHRAG_GLOBAL_TOTAL_TIMEOUT_SECONDS:-180}"
     assert services["gateway"]["depends_on"]["text2cypher-mcp"]["condition"] == "service_healthy"
     assert services["gateway"]["depends_on"]["hr-graphrag-mcp"]["condition"] == "service_healthy"
