@@ -44,6 +44,17 @@ set +a
 
 `deployment/hr-boss/.env` should include `DEER_FLOW_REPO_ROOT=/opt/deer-flow` so Docker can map host-side skill paths correctly.
 
+If the server cannot reach PyPI, npm, or Debian mirrors reliably, set build mirrors in `deployment/hr-boss/.env` before running `docker compose up --build`:
+
+```dotenv
+UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+NPM_REGISTRY=https://registry.npmmirror.com
+# APT_MIRROR=mirrors.aliyun.com
+```
+
+The Gateway image uses `UV_INDEX_URL` during `uv sync`. If a build fails while fetching `hatchling` or another Python package from `https://pypi.org/simple`, this mirror setting is the first thing to check.
+
 For WeCom/channel deployment, keep `GATEWAY_WORKERS=1`. Channel calls use a process-local internal auth token, so multiple Gateway workers can reject each other's internal LangGraph requests with 401.
 
 The HR Boss compose overlay also loads `deployment/hr-boss/.env` into the Gateway container. After changing `WECOM_BOT_ID` or `WECOM_BOT_SECRET`, recreate the Gateway container so `config.yaml` can resolve the new `$WECOM_*` values from the container environment.
