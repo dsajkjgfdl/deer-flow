@@ -2,42 +2,15 @@
   "mcpServers": {
     "hr-graphrag-qa": {
       "enabled": true,
-      "type": "stdio",
-      "command": "/opt/hr-mcp/graphrag-mcp/.venv/bin/python",
-      "args": [
-        "/app/scripts/run_graphrag_mcp.py"
-      ],
-      "env": {
-        "GRAPHRAG_MCP_REPO": "/opt/hr-mcp/graphrag-mcp",
-        "GRAPHRAG_DATA_ROOT": "/data/hr/graphrag/byog_graphrag",
-        "ALIBABA_API_KEY": "$ALIBABA_API_KEY"
-      },
-      "description": "Fixed HR GraphRAG QA MCP server"
+      "type": "http",
+      "url": "http://hr-graphrag-mcp:8000/mcp",
+      "description": "HR GraphRAG QA via independent HTTP MCP service"
     },
     "text2cypher": {
       "enabled": true,
-      "type": "stdio",
-      "command": "/opt/hr-mcp/text2cypher/.venv/bin/python",
-      "args": [
-        "/app/scripts/run_text2cypher_mcp.py"
-      ],
-      "env": {
-        "TEXT2CYPHER_REPO": "/opt/hr-mcp/text2cypher",
-        "TEXT2CYPHER_PROFILE_PATH": "/app/backend/.deer-flow/agents/hr-boss-agent/text2cypher-profile.md",
-        "TEXT2CYPHER_NEO4J_URI": "$TEXT2CYPHER_NEO4J_URI",
-        "TEXT2CYPHER_NEO4J_USERNAME": "$TEXT2CYPHER_NEO4J_USERNAME",
-        "TEXT2CYPHER_NEO4J_PASSWORD": "$TEXT2CYPHER_NEO4J_PASSWORD",
-        "TEXT2CYPHER_NEO4J_DATABASE": "$TEXT2CYPHER_NEO4J_DATABASE",
-        "TEXT2CYPHER_OPENAI_API_KEY": "$DASHSCOPE_API_KEY",
-        "TEXT2CYPHER_OPENAI_BASE_URL": "https://api.deepseek.com",
-        "TEXT2CYPHER_OPENAI_MODEL": "deepseek-v4-pro",
-        "TEXT2CYPHER_EMPLOYEE_QUERY_ENABLED": "true",
-        "TEXT2CYPHER_LOG_PATH": "/data/hr/logs/text2cypher/text2cypher.log",
-        "TEXT2CYPHER_MCP_CALL_LOG_PATH": "/data/hr/logs/text2cypher/mcp_calls.jsonl",
-        "TEXT2CYPHER_TRACE_ENABLED": "true",
-        "TEXT2CYPHER_TRACE_PATH": "/data/hr/logs/text2cypher/text2cypher_trace.md"
-      },
-      "description": "Local Text2Cypher engine via MCP"
+      "type": "http",
+      "url": "http://text2cypher-mcp:8000/mcp",
+      "description": "Text2Cypher engine via independent HTTP MCP service"
     }
   },
   "skills": {}

@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "hr-graphrag-qa": {
+      "enabled": true,
+      "type": "http",
+      "url": "http://127.0.0.1:8102/mcp",
+      "description": "Local HR GraphRAG QA HTTP MCP service"
+    },
+    "text2cypher": {
+      "enabled": true,
+      "type": "http",
+      "url": "http://127.0.0.1:8101/mcp",
+      "description": "Local Text2Cypher HTTP MCP service"
+    }
+  },
+  "skills": {}
+}

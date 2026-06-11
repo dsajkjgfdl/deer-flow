@@ -3,7 +3,7 @@
 This directory contains the HR Boss deployment overlay:
 
 - `.env.example`: server-side variables and host paths.
-- `extensions_config.docker.json`: MCP config using container paths.
+- `extensions_config.docker.json`: MCP config pointing Gateway at the independent HTTP MCP services.
 - `Dockerfile.data-builder`: image for rebuilding MySQL, Neo4j and GraphRAG data from the Excel file.
 - `rebuild_hr_kg.py`: containerized replacement for the local PowerShell rebuild script.
 
@@ -48,7 +48,7 @@ For WeCom/channel deployment, keep `GATEWAY_WORKERS=1`. Channel calls use a proc
 
 The HR Boss compose overlay also loads `deployment/hr-boss/.env` into the Gateway container. After changing `WECOM_BOT_ID` or `WECOM_BOT_SECRET`, recreate the Gateway container so `config.yaml` can resolve the new `$WECOM_*` values from the container environment.
 
-Prepare external MCP virtual environments on the server before starting Gateway:
+Prepare external MCP virtual environments on the server before starting the HTTP MCP services:
 
 ```bash
 cd /opt/hr-mcp/text2cypher
@@ -66,7 +66,7 @@ docker run --rm -v "$PWD":/work -w /work python:3.12-slim-bookworm \
 test -x .venv/bin/python
 ```
 
-Do not rely on a host `uv sync` venv whose `.venv/bin/python` links to `/root/.local/share/uv/...`; that symlink can be valid on the host but broken inside the Gateway container.
+Do not rely on a host `uv sync` venv whose `.venv/bin/python` links to `/root/.local/share/uv/...`; that symlink can be valid on the host but broken inside the MCP service containers.
 
 Rebuild data from Excel:
 
@@ -85,13 +85,26 @@ Start runtime:
 docker compose -p hr-boss \
   -f docker/docker-compose.yaml \
   -f docker/docker-compose.hr-boss.yaml \
-  up -d --build nginx frontend gateway neo4j mysql
+  up -d --build nginx frontend gateway text2cypher-mcp hr-graphrag-mcp neo4j mysql
 ```
 
 Open:
 
 ```text
 http://SERVER_IP:2026
+```
+
+The MCP services are internal-only by default. Gateway connects to:
+
+```text
+http://text2cypher-mcp:8000/mcp
+http://hr-graphrag-mcp:8000/mcp
+```
+
+Inspect their logs independently:
+
+```bash
+docker compose -p hr-boss -f docker/docker-compose.yaml -f docker/docker-compose.hr-boss.yaml logs -f text2cypher-mcp hr-graphrag-mcp
 ```
 
 ## Important

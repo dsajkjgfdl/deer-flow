@@ -3,7 +3,7 @@
 # Usage from repository root:
 #   set -a && . deployment/hr-boss/.env && set +a
 #   docker compose -p hr-boss -f docker/docker-compose.yaml -f docker/docker-compose.hr-boss.yaml --profile rebuild run --build --rm hr-data-builder
-#   docker compose -p hr-boss -f docker/docker-compose.yaml -f docker/docker-compose.hr-boss.yaml up -d --build nginx frontend gateway neo4j mysql
+#   docker compose -p hr-boss -f docker/docker-compose.yaml -f docker/docker-compose.hr-boss.yaml up -d --build nginx frontend gateway text2cypher-mcp hr-graphrag-mcp neo4j mysql
 
 services:
   mysql:
@@ -96,25 +96,94 @@ services:
       - deer-flow
     restart: "no"
 
-  gateway:
+  text2cypher-mcp:
+    image: python:3.12-slim-bookworm
+    container_name: hr-boss-text2cypher-mcp
     depends_on:
       neo4j:
+        condition: service_healthy
+    command:
+      - /opt/hr-mcp/text2cypher/.venv/bin/python
+      - /app/scripts/run_text2cypher_mcp.py
+    volumes:
+      - ../scripts:/app/scripts:ro
+      - ../backend/.deer-flow/agents:/app/backend/.deer-flow/agents:ro
+      - ${TEXT2CYPHER_REPO:?set TEXT2CYPHER_REPO}:/opt/hr-mcp/text2cypher:ro
+      - ${HR_TEXT2CYPHER_LOG_DIR:-/data/hr/logs/text2cypher}:/data/hr/logs/text2cypher
+    environment:
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8000
+      MCP_LOG_LEVEL: ${HR_MCP_LOG_LEVEL:-info}
+      TEXT2CYPHER_REPO: /opt/hr-mcp/text2cypher
+      TEXT2CYPHER_PROFILE_PATH: /app/backend/.deer-flow/agents/hr-boss-agent/text2cypher-profile.md
+      TEXT2CYPHER_NEO4J_URI: bolt://neo4j:7687
+      TEXT2CYPHER_NEO4J_USERNAME: ${TEXT2CYPHER_NEO4J_USERNAME:-neo4j}
+      TEXT2CYPHER_NEO4J_PASSWORD: ${TEXT2CYPHER_NEO4J_PASSWORD:?set TEXT2CYPHER_NEO4J_PASSWORD}
+      TEXT2CYPHER_NEO4J_DATABASE: ${TEXT2CYPHER_NEO4J_DATABASE:-neo4j}
+      TEXT2CYPHER_OPENAI_API_KEY: ${DASHSCOPE_API_KEY:?set DASHSCOPE_API_KEY}
+      TEXT2CYPHER_OPENAI_BASE_URL: https://api.deepseek.com
+      TEXT2CYPHER_OPENAI_MODEL: deepseek-v4-pro
+      TEXT2CYPHER_EMPLOYEE_QUERY_ENABLED: "true"
+      TEXT2CYPHER_LOG_PATH: /data/hr/logs/text2cypher/text2cypher.log
+      TEXT2CYPHER_MCP_CALL_LOG_PATH: /data/hr/logs/text2cypher/mcp_calls.jsonl
+      TEXT2CYPHER_TRACE_ENABLED: "true"
+      TEXT2CYPHER_TRACE_PATH: /data/hr/logs/text2cypher/text2cypher_trace.md
+    healthcheck:
+      test:
+        - CMD
+        - /opt/hr-mcp/text2cypher/.venv/bin/python
+        - -c
+        - import socket; socket.create_connection(("127.0.0.1", 8000), timeout=3).close()
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - deer-flow
+    restart: unless-stopped
+
+  hr-graphrag-mcp:
+    image: python:3.12-slim-bookworm
+    container_name: hr-boss-graphrag-mcp
+    command:
+      - /opt/hr-mcp/graphrag-mcp/.venv/bin/python
+      - /app/scripts/run_graphrag_mcp.py
+    volumes:
+      - ../scripts:/app/scripts:ro
+      - ${GRAPHRAG_MCP_REPO:?set GRAPHRAG_MCP_REPO}:/opt/hr-mcp/graphrag-mcp:ro
+      - ${BYOG_GRAPHRAG_ROOT:?set BYOG_GRAPHRAG_ROOT}:/data/hr/graphrag/byog_graphrag:ro
+    environment:
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8000
+      MCP_LOG_LEVEL: ${HR_MCP_LOG_LEVEL:-info}
+      GRAPHRAG_MCP_REPO: /opt/hr-mcp/graphrag-mcp
+      GRAPHRAG_DATA_ROOT: /data/hr/graphrag/byog_graphrag
+      ALIBABA_API_KEY: ${ALIBABA_API_KEY:?set ALIBABA_API_KEY}
+    healthcheck:
+      test:
+        - CMD
+        - /opt/hr-mcp/graphrag-mcp/.venv/bin/python
+        - -c
+        - import socket; socket.create_connection(("127.0.0.1", 8000), timeout=3).close()
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - deer-flow
+    restart: unless-stopped
+
+  gateway:
+    depends_on:
+      text2cypher-mcp:
+        condition: service_healthy
+      hr-graphrag-mcp:
         condition: service_healthy
     env_file:
       - path: ../deployment/hr-boss/.env
         required: false
     volumes:
-      - ../scripts:/app/scripts:ro
       - ../backend/.deer-flow/agents:/app/backend/.deer-flow/agents:ro
-      - ${TEXT2CYPHER_REPO:?set TEXT2CYPHER_REPO}:/opt/hr-mcp/text2cypher:ro
-      - ${GRAPHRAG_MCP_REPO:?set GRAPHRAG_MCP_REPO}:/opt/hr-mcp/graphrag-mcp:ro
-      - ${BYOG_GRAPHRAG_ROOT:?set BYOG_GRAPHRAG_ROOT}:/data/hr/graphrag/byog_graphrag:ro
-      - ${HR_TEXT2CYPHER_LOG_DIR:-/data/hr/logs/text2cypher}:/data/hr/logs/text2cypher
-    environment:
-      TEXT2CYPHER_NEO4J_URI: bolt://neo4j:7687
-      TEXT2CYPHER_NEO4J_USERNAME: ${TEXT2CYPHER_NEO4J_USERNAME:-neo4j}
-      TEXT2CYPHER_NEO4J_PASSWORD: ${TEXT2CYPHER_NEO4J_PASSWORD:?set TEXT2CYPHER_NEO4J_PASSWORD}
-      TEXT2CYPHER_NEO4J_DATABASE: ${TEXT2CYPHER_NEO4J_DATABASE:-neo4j}
 
 volumes:
   hr-boss-mysql-data:

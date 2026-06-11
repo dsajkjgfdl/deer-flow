@@ -5,6 +5,7 @@ import runpy
 import sys
 from pathlib import Path
 
+from hr_mcp_transport import run_server, server_run_kwargs
 
 TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 
@@ -75,7 +76,7 @@ def run_packaged_server() -> None:
         total_timeout_seconds=settings.answer_timeout_seconds,
     )
     server = create_server(engine)
-    server.run()
+    run_server(server)
 
 
 def main() -> None:
@@ -83,7 +84,7 @@ def main() -> None:
     repo_path = str(repo_root)
     if repo_path not in sys.path:
         sys.path.insert(0, repo_path)
-    if script_path is not None and not employee_query_enabled():
+    if script_path is not None and not employee_query_enabled() and server_run_kwargs()["transport"] == "stdio":
         runpy.run_path(str(script_path), run_name="__main__")
         return
     run_packaged_server()

@@ -4,6 +4,8 @@ import os
 import sys
 from pathlib import Path
 
+from hr_mcp_transport import run_server
+
 
 def resolve_repo_src() -> Path:
     repo_raw = os.getenv("GRAPHRAG_MCP_REPO")
@@ -28,9 +30,9 @@ def ensure_repo_on_path() -> Path:
 
 def main() -> None:
     ensure_repo_on_path()
-    from graphrag_mcp.server import main as server_main
+    from graphrag_mcp.server import build_server
 
-    server_main()
+    run_server(build_server())
 
 
 if __name__ == "__main__":

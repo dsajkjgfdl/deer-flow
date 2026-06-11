@@ -15,8 +15,8 @@ flowchart TD
   FE --> GW["DeerFlow Gateway<br/>FastAPI + LangGraph runtime"]
   GW --> Agent["hr-boss-agent"]
   Agent --> Skill["hr-boss 编排 skill"]
-  Skill --> T2C["text2cypher MCP<br/>stdio 子进程"]
-  Skill --> RAG["hr-graphrag-qa MCP<br/>stdio 子进程"]
+  Skill --> T2C["text2cypher MCP<br/>独立 HTTP 服务"]
+  Skill --> RAG["hr-graphrag-qa MCP<br/>独立 HTTP 服务"]
   T2C --> N4J["Neo4j HR 图谱"]
   RAG --> RAGDATA["GraphRAG BYOG 数据目录"]
   MYSQL["MySQL HR 中间库"] -. "构建链路" .-> N4J
@@ -66,7 +66,7 @@ docker compose -p hr-boss \
 docker compose -p hr-boss \
   -f docker/docker-compose.yaml \
   -f docker/docker-compose.hr-boss.yaml \
-  up -d --build nginx frontend gateway neo4j mysql
+  up -d --build nginx frontend gateway text2cypher-mcp hr-graphrag-mcp neo4j mysql
 ```
 
 模块划分如下：
@@ -74,9 +74,9 @@ docker compose -p hr-boss \
 | 模块 | 推荐形态 | 说明 |
 | --- | --- | --- |
 | DeerFlow 前后端 | Docker Compose | 仓库已有 `docker/docker-compose.yaml`，入口端口默认 `2026`。 |
-| Gateway | Docker 容器 | Gateway 会按 `extensions_config.json` 拉起 stdio MCP 子进程。 |
-| Text2Cypher MCP | Gateway 容器内 stdio 子进程 | 通过 `TEXT2CYPHER_REPO` 挂载到 `/opt/hr-mcp/text2cypher`。 |
-| GraphRAG MCP | Gateway 容器内 stdio 子进程 | 通过 `GRAPHRAG_MCP_REPO` 挂载到 `/opt/hr-mcp/graphrag-mcp`。 |
+| Gateway | Docker 容器 | Gateway 按 `extensions_config.json` 连接两个内部 HTTP MCP 服务，不再负责拉起 MCP 子进程。 |
+| Text2Cypher MCP | 独立 Compose HTTP 服务 | 通过 `TEXT2CYPHER_REPO` 挂载外部仓库，访问 Neo4j，监听容器内 `8000/mcp`。 |
+| GraphRAG MCP | 独立 Compose HTTP 服务 | 通过 `GRAPHRAG_MCP_REPO` 和 `BYOG_GRAPHRAG_ROOT` 挂载代码与数据，监听容器内 `8000/mcp`。 |
 | hr-data-builder | 只在 `rebuild` profile 中运行 | 从 Excel 全量重建 MySQL、Neo4j、GraphRAG。运行完退出。 |
 | Neo4j | Compose 服务 | Text2Cypher 在线查询和数据重建共同使用。 |
 | MySQL | Compose 服务 | 数据重建阶段必须使用；运行时可保留以便排障和后续增量构建。 |
@@ -296,8 +296,9 @@ Docker 生产 compose 默认只挂载 DeerFlow 自身目录。新增的 `docker/
 - 增加 `mysql` 服务。
 - 增加 `neo4j` 服务。
 - 增加只在 `rebuild` profile 运行的 `hr-data-builder` 服务。
-- 给 `gateway` 追加 Text2Cypher、GraphRAG MCP、GraphRAG 数据目录挂载。
-- 给 `gateway` 注入容器内 Neo4j 地址 `bolt://neo4j:7687`。
+- 增加独立的 `text2cypher-mcp` 和 `hr-graphrag-mcp` HTTP 服务。
+- 给两个 MCP 服务挂载各自代码、数据和日志目录，并注入运行环境变量。
+- 让 `gateway` 等待两个 MCP 健康后，通过内部服务 URL 连接。
 
 Docker 版 MCP 配置使用：
 
@@ -373,9 +374,9 @@ docker run --rm -v "$PWD":/work -w /work python:3.12-slim-bookworm \
 test -x .venv/bin/python
 ```
 
-如果这里任意一个 `test -x .venv/bin/python` 失败，Gateway 就无法通过 stdio 拉起对应 MCP，日志会出现类似 `No such file or directory: '/opt/hr-mcp/graphrag-mcp/.venv/bin/python'`。
+如果这里任意一个 `test -x .venv/bin/python` 失败，对应 HTTP MCP 容器就无法启动，日志会出现类似 `No such file or directory: '/opt/hr-mcp/graphrag-mcp/.venv/bin/python'`。
 
-不要只在宿主机执行 `uv sync` 后检查软链接是否存在。`uv sync` 创建的 `.venv/bin/python` 可能指向宿主机的 `/root/.local/share/uv/...`，该路径在 Gateway 容器内不存在，会导致宿主机看着存在、容器里启动失败。
+不要只在宿主机执行 `uv sync` 后检查软链接是否存在。`uv sync` 创建的 `.venv/bin/python` 可能指向宿主机的 `/root/.local/share/uv/...`，该路径在 MCP 服务容器内不存在，会导致宿主机看着存在、容器里启动失败。
 
 快速检查启动包装器：
 
@@ -385,6 +386,9 @@ cd /opt/deer-flow
 GRAPHRAG_MCP_REPO=/opt/hr-mcp/graphrag-mcp \
 GRAPHRAG_DATA_ROOT=/data/hr/graphrag/byog_graphrag \
 ALIBABA_API_KEY=your_alibaba_api_key \
+MCP_TRANSPORT=streamable-http \
+MCP_HOST=127.0.0.1 \
+MCP_PORT=8002 \
 /opt/hr-mcp/graphrag-mcp/.venv/bin/python scripts/run_graphrag_mcp.py
 ```
 
@@ -398,10 +402,13 @@ TEXT2CYPHER_NEO4J_USERNAME=neo4j \
 TEXT2CYPHER_NEO4J_PASSWORD=your_password \
 TEXT2CYPHER_NEO4J_DATABASE=neo4j \
 TEXT2CYPHER_OPENAI_API_KEY=your_model_api_key \
+MCP_TRANSPORT=streamable-http \
+MCP_HOST=127.0.0.1 \
+MCP_PORT=8001 \
 /opt/hr-mcp/text2cypher/.venv/bin/python scripts/run_text2cypher_mcp.py
 ```
 
-这两个命令是 stdio MCP 服务，正常情况下会等待 MCP 客户端输入，不一定主动打印成功信息。只要没有立刻报 `repo does not exist`、`src/ not found`、依赖导入失败或 Neo4j 配置错误，就说明启动路径基本正确。检查后 `Ctrl+C` 退出。
+这两个命令分别启动本机 `http://127.0.0.1:8002/mcp` 和 `http://127.0.0.1:8001/mcp`。包装器默认仍是 `stdio`，只有设置 `MCP_TRANSPORT=http` 或 `streamable-http` 才会监听网络端口。检查后 `Ctrl+C` 退出。
 
 ## 11. 数据重建与启动
 
@@ -436,13 +443,14 @@ docker compose -p hr-boss \
 docker compose -p hr-boss \
   -f docker/docker-compose.yaml \
   -f docker/docker-compose.hr-boss.yaml \
-  up -d --build nginx frontend gateway neo4j mysql
+  up -d --build nginx frontend gateway text2cypher-mcp hr-graphrag-mcp neo4j mysql
 ```
 
 查看日志：
 
 ```bash
 docker compose -p hr-boss -f docker/docker-compose.yaml -f docker/docker-compose.hr-boss.yaml logs -f gateway
+docker compose -p hr-boss -f docker/docker-compose.yaml -f docker/docker-compose.hr-boss.yaml logs -f text2cypher-mcp hr-graphrag-mcp
 docker compose -p hr-boss -f docker/docker-compose.yaml -f docker/docker-compose.hr-boss.yaml logs -f hr-data-builder
 ```
 
@@ -498,9 +506,9 @@ curl -s http://127.0.0.1:2026/api/mcp/config
 
 | 现象 | 重点检查 |
 | --- | --- |
-| Gateway 启动后 MCP 工具不可用 | `extensions_config.json` 中对应 MCP 是否 `enabled: true`；`hr-boss-agent/config.yaml` 是否列入 `mcp_servers`；Gateway 日志里是否有 stdio 子进程启动错误。 |
-| Docker 内 MCP 路径不存在 | `gateway.volumes` 是否挂载了 MCP 仓库和数据目录；`extensions_config.json` 是否写容器内路径，不是宿主机独有路径。 |
-| `No such file or directory: '/opt/hr-mcp/.../.venv/bin/python'` | 对应外部 MCP 仓库的 `.venv/bin/python` 在 Gateway 容器内不可执行。常见原因是宿主机 `uv sync` 生成了指向 `/root/.local/share/uv/...` 的软链接；用 `python -m venv --copies` 在 Docker 一次性容器里重建 `.venv`。 |
+| Gateway 启动后 MCP 工具不可用 | `extensions_config.json` 中对应 MCP 是否 `enabled: true`；两个 MCP 服务是否健康；Gateway 是否能解析并访问 `http://text2cypher-mcp:8000/mcp` 和 `http://hr-graphrag-mcp:8000/mcp`。 |
+| Docker 内 MCP 路径不存在 | 对应 MCP 服务的 `volumes` 是否挂载了仓库和数据目录；不要把这些挂载继续放在 `gateway`。 |
+| `No such file or directory: '/opt/hr-mcp/.../.venv/bin/python'` | 对应外部 MCP 仓库的 `.venv/bin/python` 在 MCP 服务容器内不可执行。常见原因是宿主机 `uv sync` 生成了指向 `/root/.local/share/uv/...` 的软链接；用 `python -m venv --copies` 在 Docker 一次性容器里重建 `.venv`。 |
 | `Text2Cypher launcher not found under: /opt/hr-mcp/text2cypher` | `TEXT2CYPHER_REPO` 指向的不是完整 Text2Cypher 仓库。当前包装器支持 `scripts/run_text2cypher_mcp.py` 或包内 `text2cypher/adapters/mcp/server.py` 两种结构，至少要存在一种。 |
 | `Failed to write text2cypher MCP call log` / `Read-only file system: '/opt/hr-mcp/text2cypher/logs'` | Text2Cypher 默认想把日志写回只读挂载的 MCP 仓库。设置 `HR_TEXT2CYPHER_LOG_DIR=/data/hr/logs/text2cypher`，并让 `TEXT2CYPHER_LOG_PATH`、`TEXT2CYPHER_MCP_CALL_LOG_PATH`、`TEXT2CYPHER_TRACE_PATH` 指向 `/data/hr/logs/text2cypher` 下。 |
 | 企微消息触发 `langgraph_sdk.errors.AuthenticationError: 401 Unauthorized` | `GATEWAY_WORKERS` 应设为 `1`。当前内部频道调用使用进程内随机 token，多 worker 下请求可能被另一个 worker 接住导致 token 不匹配。 |
@@ -513,8 +521,8 @@ curl -s http://127.0.0.1:2026/api/mcp/config
 
 ## 14. 上线前检查
 
-- `text2cypher` MCP 能被 Gateway 拉起。
-- `hr-graphrag-qa` MCP 能被 Gateway 拉起。
+- `text2cypher-mcp` 独立 HTTP 服务健康，Gateway 能发现其工具。
+- `hr-graphrag-mcp` 独立 HTTP 服务健康，Gateway 能发现其工具。
 - Neo4j 内 HR 图谱数据和 `text2cypher-profile.md` 使用同一业务口径。
 - `GRAPHRAG_DATA_ROOT` 指向本次演示要用的 GraphRAG 数据快照。
 - `hr-boss-agent` 只挂载 `hr-boss` skill、`hr-graphrag-qa`、`text2cypher`。
@@ -540,7 +548,7 @@ curl -s http://127.0.0.1:2026/api/mcp/config
    `/opt/hr-mcp/text2cypher`
    `/opt/hr-mcp/graphrag-mcp`
    `/data/hr/graphrag/byog_graphrag`
-5. `text2cypher` 和 `graphrag-mcp` 运行时还需要准备好 Linux 环境里的 `.venv`，因为 Gateway 会用它们的 `.venv/bin/python` 拉起 MCP 子进程。
+5. `text2cypher` 和 `graphrag-mcp` 运行时还需要准备好 Linux 环境里的 `.venv`，对应独立 MCP 服务容器会使用它们的 `.venv/bin/python` 启动 HTTP 服务。
 
 然后运行你贴的两个命令。
 
@@ -561,7 +569,7 @@ docker compose --env-file deployment/hr-boss/.env -p hr-boss \
 docker compose --env-file deployment/hr-boss/.env -p hr-boss \
   -f docker/docker-compose.yaml \
   -f docker/docker-compose.hr-boss.yaml \
-  up -d --build nginx frontend gateway neo4j mysql
+  up -d --build nginx frontend gateway text2cypher-mcp hr-graphrag-mcp neo4j mysql
 ```
 
 作用是启动正式运行服务。
