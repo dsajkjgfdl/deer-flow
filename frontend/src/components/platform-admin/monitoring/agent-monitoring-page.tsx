@@ -30,7 +30,7 @@ import {
 
 import { ConversationDetail } from "./conversation-detail";
 import { ConversationList } from "./conversation-list";
-import { eventKey } from "./format";
+import { eventKey, preferredEventKey } from "./format";
 import { ImportRunDialog } from "./import-run-dialog";
 import { RunInspectionDialog } from "./run-inspection-dialog";
 
@@ -169,8 +169,7 @@ export function AgentMonitoringPage() {
         )
       : false;
     if (!exists) {
-      const firstEvent = events[0];
-      setSelectedEventKey(firstEvent ? eventKey(firstEvent, 0) : null);
+      setSelectedEventKey(preferredEventKey(events));
     }
   }, [events, selectedEventKey]);
 

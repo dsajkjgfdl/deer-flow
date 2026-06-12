@@ -78,6 +78,31 @@ export function eventKey(
   return `idx:${index}:${event.kind}:${event.occurred_at ?? ""}`;
 }
 
+function hasDisplayableText(value: unknown): boolean {
+  if (typeof value === "string") return Boolean(value.trim());
+  if (Array.isArray(value)) return value.some(hasDisplayableText);
+  if (!isRecord(value)) return false;
+  return hasDisplayableText(value.text) || hasDisplayableText(value.content);
+}
+
+export function preferredEventKey(
+  events: MonitoringTimelineEvent[],
+): string | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (
+      event?.kind === "llm.ai.response" &&
+      event.metadata?.caller === "lead_agent" &&
+      hasDisplayableText(event.content)
+    ) {
+      return eventKey(event, index);
+    }
+  }
+
+  const firstEvent = events[0];
+  return firstEvent ? eventKey(firstEvent, 0) : null;
+}
+
 export function eventTone(event: MonitoringTimelineEvent): string {
   const normalized = event.status?.toLowerCase() ?? "";
   if (
@@ -112,7 +137,10 @@ function isSensitiveKey(key: string): boolean {
   );
 }
 
-function maskSensitiveJsonInner(value: unknown, seen: WeakSet<object>): unknown {
+function maskSensitiveJsonInner(
+  value: unknown,
+  seen: WeakSet<object>,
+): unknown {
   if (Array.isArray(value)) {
     return value.map((item) => maskSensitiveJsonInner(item, seen));
   }

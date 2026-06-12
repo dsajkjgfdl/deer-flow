@@ -53,6 +53,7 @@ const timeline: MonitoringRunTimeline = {
     run_id: "bd8d6070-2",
     thread_id: "thread-wecom",
     status: "running",
+    last_ai_message: "研发部门共有 12 人。",
   },
   identity: {
     identity_type: "channel",
@@ -90,6 +91,8 @@ describe("RunInspectionDialog", () => {
     expect(markup).toContain("wecom/WuZhongHui");
     expect(markup).toContain("Run timeline");
     expect(markup).toContain("Event inspector");
+    expect(markup).toContain("Final response");
+    expect(markup).toContain("研发部门共有 12 人。");
     expect(markup).toContain("max-w-[calc(100vw-2rem)]");
     expect(markup).toContain(
       "lg:grid-cols-[minmax(320px,0.85fr)_minmax(0,1.5fr)]",

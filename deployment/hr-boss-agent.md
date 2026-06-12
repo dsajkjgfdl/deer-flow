@@ -590,3 +590,10 @@ docker compose --env-file deployment/hr-boss/.env -p hr-boss \
   -f docker/docker-compose.hr-boss.yaml \
   logs -f --tail=100 gateway
 ```
+
+```shell
+docker compose --env-file deployment/hr-boss/.env -p hr-boss \
+  -f docker/docker-compose.yaml \
+  -f docker/docker-compose.hr-boss.yaml \
+  up -d --force-recreate gateway
+```

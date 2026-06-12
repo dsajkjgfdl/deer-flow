@@ -45,6 +45,12 @@ export function RunInspectionDialog({
 }: RunInspectionDialogProps) {
   const displayedRunId = timeline?.run.run_id ?? runId;
   const displayedIdentity = timeline?.identity ?? identity;
+  const finalResponse = timeline?.run.last_ai_message?.trim();
+  const finalResponseText = finalResponse?.length
+    ? finalResponse
+    : isLoading
+      ? "Loading final response..."
+      : "No final response recorded.";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -67,6 +73,14 @@ export function RunInspectionDialog({
               {displayedIdentity ? identityText(displayedIdentity) : "-"}
             </span>
           </DialogDescription>
+          <div className="bg-muted/30 mt-1 min-w-0 rounded-md border px-3 py-2">
+            <div className="text-muted-foreground text-xs font-medium">
+              Final response
+            </div>
+            <div className="mt-1 max-h-28 overflow-y-auto text-sm whitespace-pre-wrap">
+              {finalResponseText}
+            </div>
+          </div>
         </DialogHeader>
 
         <div className="grid min-h-0 grid-rows-[minmax(280px,42vh)_minmax(360px,1fr)] overflow-y-auto lg:grid-cols-[minmax(320px,0.85fr)_minmax(0,1.5fr)] lg:grid-rows-1 lg:overflow-hidden">
