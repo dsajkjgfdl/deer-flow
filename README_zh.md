@@ -624,3 +624,95 @@ cd D:\study\deer-flow\frontend
 或者，如果无法安装pnpm，您可以尝试：
 npm install
 npm run dev
+
+
+要让 `hr-boss-agent` 使用 `D:\study\my-mcp\hr-mcp-suite` 下的 MCP，推荐使用项目已经准备好的 **HTTP MCP 模式**。
+
+当前检查结果：
+
+- GraphRAG MCP `8102` 已启动。
+- Text2Cypher MCP `8101` 未启动。
+- Neo4j `7687` 已启动。
+- `hr-mcp-suite` 两个服务都还没有 Windows `.venv`。
+- DeerFlow 默认 [`extensions_config.json`](D:/python_project/deer-flow/extensions_config.json) 仍指向旧 MCP 仓库。
+- [`extensions_config.local-http.json`](D:/python_project/deer-flow/extensions_config.local-http.json) 才指向 `8101/8102`。
+
+**首次初始化**
+
+在 PowerShell 中执行：
+
+```powershell
+cd D:\study\my-mcp\hr-mcp-suite\services\text2cypher
+uv sync --python 3.12
+
+cd D:\study\my-mcp\hr-mcp-suite\services\graphrag-mcp
+uv sync --python 3.12
+```
+
+不要使用 `scripts\bootstrap-venvs.ps1` 初始化本地 Windows 环境，它通过 Docker 创建的是 Linux `.venv\bin\python`，而 Windows 启动脚本需要 `.venv\Scripts\python.exe`。
+
+**启动顺序**
+
+分别打开三个 PowerShell 窗口。
+
+1. 启动 Text2Cypher MCP：
+
+```powershell
+& D:\study\my-mcp\hr-mcp-suite\services\text2cypher\start-http-mcp.ps1
+```
+
+地址：`http://127.0.0.1:8101/mcp`
+
+2. 启动 GraphRAG MCP：
+
+```powershell
+& D:\study\my-mcp\hr-mcp-suite\services\graphrag-mcp\start-http-mcp.ps1
+```
+
+地址：`http://127.0.0.1:8102/mcp`
+
+GraphRAG 脚本当前默认使用：
+
+```text
+D:\study\my-mcp\graphrag-data\byog_graphrag
+```
+
+这个目录已有完整索引。`hr-mcp-suite\data\byog_graphrag` 当前还没有 `output`，暂时不要切换过去。
+
+3. 使用 HTTP MCP 配置启动 DeerFlow Gateway：
+
+```powershell
+& D:\python_project\deer-flow\scripts\start-gateway-http-mcp.ps1
+```
+
+这个脚本会自动设置：
+
+```text
+DEER_FLOW_EXTENSIONS_CONFIG_PATH=D:\python_project\deer-flow\extensions_config.local-http.json
+```
+
+因此 `hr-boss-agent` 会连接 `8101/8102`，而不是启动旧目录中的 stdio MCP。
+
+**检查端口**
+
+```powershell
+Get-NetTCPConnection -State Listen |
+  Where-Object LocalPort -in 7687,8101,8102,8001
+```
+
+应看到：
+
+```text
+7687  Neo4j
+8101  Text2Cypher MCP
+8102  GraphRAG MCP
+8001  DeerFlow Gateway
+```
+
+启动 Gateway 后，可以检查实际 MCP 配置：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8001/api/mcp/config
+```
+
+注意：直接浏览器访问 `/mcp` 返回 `400` 不一定代表失败，因为 MCP 端点需要协议初始化请求。

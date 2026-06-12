@@ -128,3 +128,9 @@ def test_hr_boss_compose_runs_independent_http_mcp_services() -> None:
     assert services["hr-graphrag-mcp"]["environment"]["GRAPHRAG_GLOBAL_TOTAL_TIMEOUT_SECONDS"] == "${GRAPHRAG_GLOBAL_TOTAL_TIMEOUT_SECONDS:-180}"
     assert services["gateway"]["depends_on"]["text2cypher-mcp"]["condition"] == "service_healthy"
     assert services["gateway"]["depends_on"]["hr-graphrag-mcp"]["condition"] == "service_healthy"
+
+
+def test_production_gateway_does_not_sync_dependencies_at_startup() -> None:
+    compose = yaml.safe_load((REPO_ROOT / "docker" / "docker-compose.yaml").read_text(encoding="utf-8"))
+
+    assert "uv run --no-sync uvicorn" in compose["services"]["gateway"]["command"]
