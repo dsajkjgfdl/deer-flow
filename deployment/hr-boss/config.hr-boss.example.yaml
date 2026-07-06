@@ -1,0 +1,170 @@
+config_version: 10
+log_level: info
+
+token_usage:
+  enabled: true
+
+models:
+  - name: hr-qwen
+    display_name: HR Qwen (vLLM)
+    use: deerflow.models.vllm_provider:VllmChatModel
+    model: $QWEN_CHAT_MODEL
+    api_key: $QWEN_API_KEY
+    base_url: $QWEN_CHAT_API_BASE
+    request_timeout: 600.0
+    max_retries: 1
+    max_tokens: 8192
+    max_context_tokens: 38912
+    temperature: 0
+    stream_usage: false
+    context_preflight:
+      enabled: true
+      safety_margin_tokens: 512
+      template_overhead_tokens: 800
+      tokenizer: cl100k_base
+      on_overflow: trim
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: false
+    supports_thinking: false
+    supports_vision: false
+
+  - name: hr-deepseek
+    display_name: HR DeepSeek
+    use: deerflow.models.patched_deepseek:PatchedChatDeepSeek
+    model: $DEEPSEEK_MODEL
+    api_base: $DEEPSEEK_API_BASE
+    api_key: $DEEPSEEK_API_KEY
+    timeout: 600.0
+    max_retries: 2
+    max_tokens: 8192
+    supports_thinking: true
+    supports_vision: false
+    supports_reasoning_effort: true
+    when_thinking_enabled:
+      extra_body:
+        thinking:
+          type: enabled
+    when_thinking_disabled:
+      extra_body:
+        thinking:
+          type: disabled
+
+tool_groups:
+  - name: file:read
+
+tools:
+  - name: ls
+    group: file:read
+    use: deerflow.sandbox.tools:ls_tool
+
+  - name: read_file
+    group: file:read
+    use: deerflow.sandbox.tools:read_file_tool
+
+  - name: glob
+    group: file:read
+    use: deerflow.sandbox.tools:glob_tool
+    max_results: 200
+
+  - name: grep
+    group: file:read
+    use: deerflow.sandbox.tools:grep_tool
+    max_results: 100
+
+tool_search:
+  enabled: false
+
+loop_detection:
+  enabled: true
+  warn_threshold: 3
+  hard_limit: 5
+  window_size: 20
+  max_tracked_threads: 100
+  tool_freq_warn: 30
+  tool_freq_hard_limit: 50
+
+sandbox:
+  use: deerflow.sandbox.local:LocalSandboxProvider
+  allow_host_bash: false
+  bash_output_max_chars: 20000
+  read_file_output_max_chars: 50000
+  ls_output_max_chars: 20000
+
+database:
+  backend: sqlite
+  sqlite_dir: .deer-flow/data
+
+
+skills:
+  container_path: /mnt/skills
+
+title:
+  enabled: true
+  max_words: 6
+  max_chars: 60
+  model_name: null
+
+summarization:
+  enabled: true
+  model_name: null
+  trigger:
+    - type: tokens
+      value: 12000
+    - type: messages
+      value: 30
+  keep:
+    type: messages
+    value: 8
+  trim_tokens_to_summarize: 15564
+  summary_prompt: null
+  preserve_recent_skill_count: 5
+  preserve_recent_skill_tokens: 25000
+  preserve_recent_skill_tokens_per_skill: 5000
+  skill_file_read_tool_names:
+    - read_file
+    - read
+    - view
+    - cat
+
+memory:
+  enabled: true
+  storage_path: memory.json
+  debounce_seconds: 30
+  model_name: null
+  max_facts: 100
+  fact_confidence_threshold: 0.7
+  injection_enabled: true
+  max_injection_tokens: 2000
+
+agents_api:
+  enabled: false
+
+skill_evolution:
+  enabled: false
+
+run_events:
+  backend: db
+  max_trace_content: 10240
+  track_token_usage: true
+  capture_llm_requests: "full"
+  max_llm_request_content: 200000
+
+channels:
+  langgraph_url: http://localhost:8001/api
+  gateway_url: http://localhost:8001
+  session:
+    assistant_id: hr-boss-agent
+    config:
+      recursion_limit: 100
+    context:
+      thinking_enabled: true
+      is_plan_mode: false
+      subagent_enabled: false
+  wecom:
+    enabled: true
+    bot_id: $WECOM_BOT_ID
+    bot_secret: $WECOM_BOT_SECRET
+    working_message: 正在查询 HR 数据，请稍候...
+    stream_soft_timeout_seconds: 480
+    stream_timeout_message: 任务处理时间较长，完成后将单独发送最终结果。

@@ -1,0 +1,266 @@
+# Standalone HR Boss offline runtime compose.
+#
+# Usage from deploy bundle root:
+#   docker compose --env-file deployment/hr-boss/.env -p hr-boss \
+#     -f docker/docker-compose.hr-boss.offline.yaml up -d
+
+services:
+  nginx:
+    image: ${NGINX_IMAGE:-nginx:alpine}
+    container_name: deer-flow-nginx
+    ports:
+      - "${PORT:-2026}:2026"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf.template:ro
+    command: >
+      sh -c "cp /etc/nginx/nginx.conf.template /etc/nginx/nginx.conf
+      && nginx -g 'daemon off;'"
+    depends_on:
+      - frontend
+      - gateway
+    networks:
+      - deer-flow
+    restart: unless-stopped
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-hr-boss/deer-flow-frontend:offline}
+    container_name: deer-flow-frontend
+    environment:
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET}
+      DEER_FLOW_INTERNAL_GATEWAY_BASE_URL: http://gateway:8001
+      DEER_FLOW_TRUSTED_ORIGINS: ${DEER_FLOW_TRUSTED_ORIGINS:-}
+    env_file:
+      - path: ../frontend/.env
+        required: false
+    networks:
+      - deer-flow
+    restart: unless-stopped
+
+  gateway:
+    image: ${GATEWAY_IMAGE:-hr-boss/deer-flow-gateway:offline}
+    container_name: deer-flow-gateway
+    command: sh -c "cd backend && PYTHONPATH=. uv run --no-sync python -m deerflow.persistence.migrate && PYTHONPATH=. uv run --no-sync uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --workers ${GATEWAY_WORKERS:-1}"
+    volumes:
+      - ${DEER_FLOW_CONFIG_PATH:?set DEER_FLOW_CONFIG_PATH}:/app/backend/config.yaml:ro
+      - ${DEER_FLOW_EXTENSIONS_CONFIG_PATH:?set DEER_FLOW_EXTENSIONS_CONFIG_PATH}:/app/backend/extensions_config.json:ro
+      - ../skills:/app/skills:ro
+      - ${DEER_FLOW_HOME:?set DEER_FLOW_HOME}:/app/backend/.deer-flow
+      - ../backend/.deer-flow/agents:/app/backend/.deer-flow/agents:ro
+      - ${DEER_FLOW_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - type: bind
+        source: ${HOME:?HOME must be set}/.claude
+        target: /root/.claude
+        read_only: true
+        bind:
+          create_host_path: true
+      - type: bind
+        source: ${HOME:?HOME must be set}/.codex
+        target: /root/.codex
+        read_only: true
+        bind:
+          create_host_path: true
+    working_dir: /app
+    environment:
+      CI: "true"
+      DEER_FLOW_PROJECT_ROOT: /app
+      DEER_FLOW_HOME: /app/backend/.deer-flow
+      DEER_FLOW_CONFIG_PATH: /app/backend/config.yaml
+      DEER_FLOW_EXTENSIONS_CONFIG_PATH: /app/backend/extensions_config.json
+      DEER_FLOW_CHANNELS_LANGGRAPH_URL: ${DEER_FLOW_CHANNELS_LANGGRAPH_URL:-http://gateway:8001/api}
+      DEER_FLOW_CHANNELS_GATEWAY_URL: ${DEER_FLOW_CHANNELS_GATEWAY_URL:-http://gateway:8001}
+      DEER_FLOW_HOST_BASE_DIR: ${DEER_FLOW_HOME}
+      DEER_FLOW_HOST_SKILLS_PATH: ${DEER_FLOW_REPO_ROOT:?set DEER_FLOW_REPO_ROOT}/skills
+      DEER_FLOW_SANDBOX_HOST: host.docker.internal
+    env_file:
+      - path: ../.env
+        required: false
+      - path: ../deployment/hr-boss/.env
+        required: false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      text2cypher-mcp:
+        condition: service_healthy
+      hr-graphrag-mcp:
+        condition: service_healthy
+    networks:
+      - deer-flow
+    restart: unless-stopped
+
+  mysql:
+    image: ${MYSQL_IMAGE:-mysql:8.4}
+    container_name: hr-boss-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-huoju_hr}
+      MYSQL_USER: ${MYSQL_USER:-hr}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+      TZ: Asia/Shanghai
+    ports:
+      - "${MYSQL_PUBLISHED_PORT:-3306}:3306"
+    volumes:
+      - hr-boss-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - deer-flow
+    restart: unless-stopped
+
+  neo4j:
+    image: ${NEO4J_IMAGE:-neo4j:5}
+    container_name: hr-boss-neo4j
+    environment:
+      NEO4J_AUTH: ${TEXT2CYPHER_NEO4J_USERNAME:-neo4j}/${TEXT2CYPHER_NEO4J_PASSWORD:?set TEXT2CYPHER_NEO4J_PASSWORD}
+      NEO4J_dbms_default__database: ${TEXT2CYPHER_NEO4J_DATABASE:-neo4j}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+      NEO4J_dbms_security_procedures_allowlist: apoc.*
+      TZ: Asia/Shanghai
+    ports:
+      - "${NEO4J_HTTP_PUBLISHED_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PUBLISHED_PORT:-7687}:7687"
+    volumes:
+      - hr-boss-neo4j-data:/data
+      - hr-boss-neo4j-logs:/logs
+      - hr-boss-neo4j-plugins:/plugins
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - deer-flow
+    restart: unless-stopped
+
+  text2cypher-mcp:
+    image: ${TEXT2CYPHER_MCP_IMAGE:-hr-boss/text2cypher-mcp:offline}
+    container_name: hr-boss-text2cypher-mcp
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    volumes:
+      - ../backend/.deer-flow/agents:/app/backend/.deer-flow/agents:ro
+      - ${HR_TEXT2CYPHER_LOG_DIR:-/data/hr/logs/text2cypher}:/data/hr/logs/text2cypher
+    environment:
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8000
+      MCP_LOG_LEVEL: ${HR_MCP_LOG_LEVEL:-info}
+      TEXT2CYPHER_PROFILE_PATH: /app/backend/.deer-flow/agents/hr-boss-agent/text2cypher-profile.md
+      TEXT2CYPHER_NEO4J_URI: bolt://neo4j:7687
+      TEXT2CYPHER_NEO4J_USERNAME: ${TEXT2CYPHER_NEO4J_USERNAME:-neo4j}
+      TEXT2CYPHER_NEO4J_PASSWORD: ${TEXT2CYPHER_NEO4J_PASSWORD:?set TEXT2CYPHER_NEO4J_PASSWORD}
+      TEXT2CYPHER_NEO4J_DATABASE: ${TEXT2CYPHER_NEO4J_DATABASE:-neo4j}
+      HR_LLM_PROFILE: ${HR_LLM_PROFILE:-qwen}
+      QWEN_API_KEY: ${QWEN_API_KEY:?set QWEN_API_KEY}
+      QWEN_CHAT_API_BASE: ${QWEN_CHAT_API_BASE:-http://36.212.39.231:11435/v1}
+      QWEN_CHAT_MODEL: ${QWEN_CHAT_MODEL:-Qwen3}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY}
+      DEEPSEEK_API_BASE: ${DEEPSEEK_API_BASE:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-pro}
+      TEXT2CYPHER_EMPLOYEE_QUERY_ENABLED: "true"
+      TEXT2CYPHER_LOG_PATH: /data/hr/logs/text2cypher/text2cypher.log
+      TEXT2CYPHER_MCP_CALL_LOG_PATH: /data/hr/logs/text2cypher/mcp_calls.jsonl
+      TEXT2CYPHER_TRACE_ENABLED: "true"
+      TEXT2CYPHER_TRACE_PATH: /data/hr/logs/text2cypher/text2cypher_trace.md
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import socket; socket.create_connection(("127.0.0.1", 8000), timeout=3).close()
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - deer-flow
+    restart: unless-stopped
+
+  hr-graphrag-mcp:
+    image: ${HR_GRAPHRAG_MCP_IMAGE:-hr-boss/hr-graphrag-mcp:offline}
+    container_name: hr-boss-graphrag-mcp
+    volumes:
+      - ${BYOG_GRAPHRAG_ROOT:?set BYOG_GRAPHRAG_ROOT}:/data/hr/graphrag/byog_graphrag
+    environment:
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8000
+      MCP_LOG_LEVEL: ${HR_MCP_LOG_LEVEL:-info}
+      GRAPHRAG_DATA_ROOT: /data/hr/graphrag/byog_graphrag
+      GRAPHRAG_QUERY_TIMEOUT_SECONDS: ${GRAPHRAG_QUERY_TIMEOUT_SECONDS:-90}
+      GRAPHRAG_GLOBAL_PRIMARY_TIMEOUT_SECONDS: ${GRAPHRAG_GLOBAL_PRIMARY_TIMEOUT_SECONDS:-120}
+      GRAPHRAG_GLOBAL_FALLBACK_TIMEOUT_SECONDS: ${GRAPHRAG_GLOBAL_FALLBACK_TIMEOUT_SECONDS:-45}
+      GRAPHRAG_GLOBAL_TOTAL_TIMEOUT_SECONDS: ${GRAPHRAG_GLOBAL_TOTAL_TIMEOUT_SECONDS:-180}
+      HR_LLM_PROFILE: ${HR_LLM_PROFILE:-qwen}
+      QWEN_API_KEY: ${QWEN_API_KEY:?set QWEN_API_KEY}
+      QWEN_CHAT_API_BASE: ${QWEN_CHAT_API_BASE:-http://36.212.39.231:11435/v1}
+      QWEN_CHAT_MODEL: ${QWEN_CHAT_MODEL:-Qwen3}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY}
+      DEEPSEEK_API_BASE: ${DEEPSEEK_API_BASE:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-pro}
+      GRAPHRAG_EMBEDDING_API_BASE: ${GRAPHRAG_EMBEDDING_API_BASE:-http://36.138.220.105:11434/v1}
+      GRAPHRAG_EMBEDDING_API_KEY: ${GRAPHRAG_EMBEDDING_API_KEY:-ollama}
+      GRAPHRAG_EMBEDDING_MODEL: ${GRAPHRAG_EMBEDDING_MODEL:-bge-m3}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import socket; socket.create_connection(("127.0.0.1", 8000), timeout=3).close()
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - deer-flow
+    restart: unless-stopped
+
+  hr-data-builder:
+    image: ${HR_DATA_BUILDER_IMAGE:-hr-boss/hr-data-builder:offline}
+    container_name: hr-boss-data-builder
+    profiles:
+      - rebuild
+    depends_on:
+      mysql:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    volumes:
+      - ${HUOJU_APIFOX_DIR:?set HUOJU_APIFOX_DIR}:/data/hr/apifox:ro
+      - ${BYOG_GRAPHRAG_ROOT:?set BYOG_GRAPHRAG_ROOT}:/data/hr/graphrag/byog_graphrag
+    environment:
+      DEER_FLOW_PROJECT_ROOT: /app
+      HUOJU_APIFOX_DIR: /data/hr/apifox
+      HUOJU_HR_APIFOX_PATH: /data/hr/apifox/${HUOJU_HR_APIFOX_FILE:-火炬hr.Apifox.json}
+      HUOJU_TOKEN_APIFOX_PATH: /data/hr/apifox/${HUOJU_TOKEN_APIFOX_FILE:-火炬token.Apifox.json}
+      HUOJU_API_BASE_URL: ${HUOJU_API_BASE_URL:-http://192.168.180.51:31606}
+      HUOJU_API_TIMEOUT_SECONDS: ${HUOJU_API_TIMEOUT_SECONDS:-30}
+      HUOJU_RAW_TABLE_PREFIX: ${HUOJU_RAW_TABLE_PREFIX:-hr_}
+      HUOJU_MYSQL_DATABASE: ${MYSQL_DATABASE:-huoju_hr}
+      GRAPHRAG_DATA_ROOT: /data/hr/graphrag/byog_graphrag
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_USER:-hr}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-huoju_hr}
+      MYSQL_CHARSET: ${MYSQL_CHARSET:-utf8mb4}
+      BYOG_NEO4J_URI: bolt://neo4j:7687
+      BYOG_NEO4J_USERNAME: ${TEXT2CYPHER_NEO4J_USERNAME:-neo4j}
+      BYOG_NEO4J_PASSWORD: ${TEXT2CYPHER_NEO4J_PASSWORD:?set TEXT2CYPHER_NEO4J_PASSWORD}
+      BYOG_NEO4J_DATABASE: ${TEXT2CYPHER_NEO4J_DATABASE:-neo4j}
+    command: python /app/deployment/hr-boss/sync_huoju_hr_data.py --force
+    networks:
+      - deer-flow
+    restart: "no"
+
+networks:
+  deer-flow:
+    driver: bridge
+
+volumes:
+  hr-boss-mysql-data:
+  hr-boss-neo4j-data:
+  hr-boss-neo4j-logs:
+  hr-boss-neo4j-plugins:

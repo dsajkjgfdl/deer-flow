@@ -126,3 +126,96 @@ These apply repo-wide; module guides own the module-specific detail.
   frontend tests live in `frontend/tests/`.
 - **Format before pushing** — run `make format` (backend) / `pnpm check` (frontend). Backend
   CI enforces `ruff format --check`, so formatting must be clean before a push.
+
+## Local HR Boss Extension
+
+This fork also carries a local `hr-boss-agent` for leadership-facing HR demos. Treat this
+as a custom agent layer on top of DeerFlow, not a new DeerFlow core runtime component.
+
+### Source Files
+
+- Agent config: `backend/.deer-flow/agents/hr-boss-agent/config.yaml`
+- Agent persona prompt: `backend/.deer-flow/agents/hr-boss-agent/SOUL.md`
+- Text2Cypher business profile: `backend/.deer-flow/agents/hr-boss-agent/text2cypher-profile.md`
+- Orchestration skill: `skills/custom/hr-boss/SKILL.md`
+
+### HR MCP Source Of Truth
+
+HR Boss MCP services are maintained in `D:/study/my-mcp/hr-mcp-suite`:
+
+- Text2Cypher: `D:/study/my-mcp/hr-mcp-suite/services/text2cypher`
+- GraphRAG MCP: `D:/study/my-mcp/hr-mcp-suite/services/graphrag-mcp`
+- GraphRAG data pipeline: `D:/study/my-mcp/hr-mcp-suite/data/byog_graphrag`
+
+Do not modify or depend on the old standalone directories
+`D:/study/my-mcp/text2cypher`, `D:/study/my-mcp/graphrag-mcp`, or
+`D:/study/my-mcp/graphrag-data`. If DeerFlow config, startup scripts, docs, or running
+processes still point to old paths, fix them to `hr-mcp-suite` first.
+
+### HR Data Sources
+
+The Excel -> Neo4j/GraphRAG HR source lives in the local desktop HR knowledge-graph
+folder; the rebuild flow is the companion `rebuild_hr_kg.ps1` script. Treat Excel and
+rebuild scripts as source of truth, and Neo4j/Text2Cypher/GraphRAG as derived query
+layers.
+
+This fork also includes a separate Huoju HR MySQL cleaning layer sourced from Huoju HR
+APIs. It is not the same data source as the Excel -> Neo4j/GraphRAG pipeline.
+
+- Import script: `backend/scripts/import_huoju_hr_mysql.py`
+- Cleaning script: `backend/scripts/clean_huoju_hr_mysql.py`
+- Tests: `backend/tests/test_import_huoju_hr_mysql.py`,
+  `backend/tests/test_clean_huoju_hr_mysql.py`
+- Cleaning plan: the Huoju HR cleaning Markdown document under `my_doc/`
+
+The MySQL cleaning database defaults to `huoju_hr`. Raw `hr_*` tables keep the original
+payload; cleaning scripts rebuild derived tables with `DROP + CREATE` and do not mutate
+the raw API tables.
+
+### HR Boss Prompt Layering
+
+Keep HR Boss prompt responsibilities separated:
+
+- `SOUL.md` keeps only identity, runtime boundary, authority principles, and
+  leadership-facing answer style.
+- `skills/custom/hr-boss/SKILL.md` owns routing, tool call order, failure handling, task
+  cards, and answer rewriting.
+- `text2cypher-profile.md` owns detailed HR business semantics: headcount, current
+  employee scope, organization, title, candidate expansion, and ranking/list rules.
+
+Do not copy detailed skill routing into `SOUL.md`; do not copy fine-grained business
+semantics from the profile into `SOUL.md` or the skill.
+
+### HR Boss Tool Authority
+
+- Text2Cypher has highest authority for exact counts, aggregations, filtered lists, and
+  rankings.
+- GraphRAG has highest authority for semantic explanations, evidence synthesis,
+  organization portraits, and exploratory analysis.
+- Do not let GraphRAG override Text2Cypher exact query results.
+- For questions that mix exact statistics and background explanation, query Text2Cypher
+  first, then use GraphRAG only as explanatory support.
+- If GraphRAG evidence is insufficient, say so instead of inventing evidence.
+
+### HR Boss Runtime Shape
+
+The default HR Boss agent uses:
+
+- `name`: `hr-boss-agent`
+- `model`: `hr-qwen`
+- `skills`: `hr-boss`
+- MCP servers: `hr-graphrag-qa`, `text2cypher`
+
+The main DeerFlow agent model can switch between `hr-qwen` and `hr-deepseek`; HR MCP
+completion models switch via `HR_LLM_PROFILE=qwen|deepseek`. After changing
+`HR_LLM_PROFILE`, restart the gateway, Text2Cypher MCP, and GraphRAG MCP.
+
+### HR Cleaning Verification
+
+Common checks for the Huoju cleaning layer:
+
+```powershell
+python -m pytest backend/tests/test_clean_huoju_hr_mysql.py backend/tests/test_import_huoju_hr_mysql.py -q
+python -m py_compile backend/scripts/clean_huoju_hr_mysql.py backend/scripts/import_huoju_hr_mysql.py
+python backend/scripts/clean_huoju_hr_mysql.py
+```

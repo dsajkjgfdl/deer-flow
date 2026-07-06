@@ -1,0 +1,21 @@
+name: hr-boss-agent
+display_name: 人岗匹配智能体
+description: 人岗匹配智能体，面向领导演示的 HR 智能问答代理，按问题意图路由到 GraphRAG 或 Text2Cypher
+model: hr-qwen
+tool_groups:
+  - file:read
+skills:
+  - hr-boss
+mcp_servers:
+  - hr-graphrag-qa
+  - text2cypher
+allowed_tools:
+  - ask_clarification
+  - read_file
+  - text2cypher_query_employees
+  - text2cypher_get_employee_profile
+  - text2cypher_answer_question
+  - hr-graphrag-qa_query_basic
+  - hr-graphrag-qa_query_local
+  - hr-graphrag-qa_query_global
+  - hr-graphrag-qa_query_drift

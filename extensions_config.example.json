@@ -28,6 +28,58 @@
       ],
       "env": {},
       "description": "PostgreSQL database access"
+    },
+    "hr-graphrag-qa": {
+      "enabled": false,
+      "type": "stdio",
+      "command": "D:/study/my-mcp/hr-mcp-suite/services/graphrag-mcp/.venv/Scripts/python.exe",
+      "args": [
+        "D:/python_project/deer-flow/scripts/run_graphrag_mcp.py"
+      ],
+      "env": {
+        "GRAPHRAG_MCP_REPO": "D:/study/my-mcp/hr-mcp-suite/services/graphrag-mcp",
+        "GRAPHRAG_DATA_ROOT": "D:/study/my-mcp/hr-mcp-suite/data/byog_graphrag",
+        "HR_LLM_PROFILE": "$HR_LLM_PROFILE",
+        "QWEN_API_KEY": "$QWEN_API_KEY",
+        "QWEN_CHAT_API_BASE": "$QWEN_CHAT_API_BASE",
+        "QWEN_CHAT_MODEL": "$QWEN_CHAT_MODEL",
+        "DEEPSEEK_API_KEY": "$DEEPSEEK_API_KEY",
+        "DEEPSEEK_API_BASE": "$DEEPSEEK_API_BASE",
+        "DEEPSEEK_MODEL": "$DEEPSEEK_MODEL",
+        "GRAPHRAG_EMBEDDING_API_BASE": "http://36.138.220.105:11434/v1",
+        "GRAPHRAG_EMBEDDING_API_KEY": "ollama",
+        "GRAPHRAG_EMBEDDING_MODEL": "bge-m3"
+      },
+      "description": "Fixed HR GraphRAG QA MCP server"
+    },
+    "text2cypher": {
+      "enabled": false,
+      "type": "stdio",
+      "command": "D:/study/my-mcp/hr-mcp-suite/services/text2cypher/.venv/Scripts/python.exe",
+      "args": [
+        "D:/python_project/deer-flow/scripts/run_text2cypher_mcp.py"
+      ],
+      "env": {
+        "TEXT2CYPHER_REPO": "D:/study/my-mcp/hr-mcp-suite/services/text2cypher",
+        "TEXT2CYPHER_PROFILE_PATH": "D:/python_project/deer-flow/backend/.deer-flow/agents/hr-boss-agent/text2cypher-profile.md",
+        "TEXT2CYPHER_NEO4J_URI": "bolt://localhost:7687",
+        "TEXT2CYPHER_NEO4J_USERNAME": "neo4j",
+        "TEXT2CYPHER_NEO4J_PASSWORD": "neo4j",
+        "TEXT2CYPHER_NEO4J_DATABASE": "neo4j",
+        "HR_LLM_PROFILE": "$HR_LLM_PROFILE",
+        "QWEN_API_KEY": "$QWEN_API_KEY",
+        "QWEN_CHAT_API_BASE": "$QWEN_CHAT_API_BASE",
+        "QWEN_CHAT_MODEL": "$QWEN_CHAT_MODEL",
+        "DEEPSEEK_API_KEY": "$DEEPSEEK_API_KEY",
+        "DEEPSEEK_API_BASE": "$DEEPSEEK_API_BASE",
+        "DEEPSEEK_MODEL": "$DEEPSEEK_MODEL",
+        "TEXT2CYPHER_OPENAI_THINKING_ENABLED": "false",
+        "TEXT2CYPHER_OPENAI_TIMEOUT_SECONDS": "18",
+        "TEXT2CYPHER_OPENAI_MAX_RETRIES": "0",
+        "TEXT2CYPHER_ANSWER_TIMEOUT_SECONDS": "30",
+        "TEXT2CYPHER_EMPLOYEE_QUERY_ENABLED": "true"
+      },
+      "description": "Local Text2Cypher engine via MCP"
     }
   },
   "skills": {}

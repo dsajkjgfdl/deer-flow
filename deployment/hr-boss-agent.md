@@ -1,0 +1,755 @@
+# HR Boss Agent 服务器部署文档
+
+> 当前生产数据源已切换为火炬 HR 接口。数据构建链路为
+> `火炬 HR API -> MySQL hr_* 原始表 -> MySQL 清洗层 -> Neo4j/GraphRAG`。
+> 部署时应使用 `deployment/hr-boss/sync_huoju_hr_data.py` 和
+> `docker/docker-compose.hr-boss.offline.yaml` 中的 `hr-data-builder`，
+> 不再按旧 Excel + `import_compressed.py` 链路准备生产数据。
+
+本文档面向 `hr-boss-agent` 的服务器部署。当前实现不是把 HR 能力写进 DeerFlow 核心，而是让 DeerFlow Gateway 作为对话运行时和 MCP Host，通过 `hr-boss` 编排 skill 路由到两个专业 MCP：
+
+- `text2cypher`：连接 Neo4j，回答人数、名单、排名、平均值、占比、筛选等精确查询。
+- `hr-graphrag-qa`：读取 GraphRAG 索引数据，回答证据片段、人员/岗位/部门局部事实、组织画像、趋势和探索分析。
+
+MySQL 当前不在 `hr-boss-agent` 在线问答主链路里直接使用，但它是火炬 HR 接口原始层、清洗层以及重建 Neo4j/GraphRAG 的中间库。`xiyan-text2sql` 仍然只是评测对账通道，纯领导问答部署可以不启用。
+
+## 1. 部署拓扑
+
+```mermaid
+flowchart TD
+  U["领导/演示用户"] --> FE["DeerFlow Frontend / WeCom"]
+  FE --> GW["DeerFlow Gateway<br/>FastAPI + LangGraph runtime"]
+  GW --> Agent["hr-boss-agent"]
+  Agent --> Skill["hr-boss 编排 skill"]
+  Skill --> T2C["text2cypher MCP<br/>独立 HTTP 服务"]
+  Skill --> RAG["hr-graphrag-qa MCP<br/>独立 HTTP 服务"]
+  T2C --> N4J["Neo4j HR 图谱"]
+  RAG --> RAGDATA["GraphRAG BYOG 数据目录"]
+  MYSQL["MySQL HR 中间库"] -. "构建链路" .-> N4J
+  MYSQL -. "构建链路" .-> RAGDATA
+```
+
+当前源码依据：
+
+- Agent 配置：`backend/.deer-flow/agents/hr-boss-agent/config.yaml`
+- Agent 提示：`backend/.deer-flow/agents/hr-boss-agent/SOUL.md`
+- Text2Cypher 业务口径：`backend/.deer-flow/agents/hr-boss-agent/text2cypher-profile.md`
+- 编排 skill：`skills/custom/hr-boss/SKILL.md`
+- MCP 注册：`extensions_config.json`
+- Text2Cypher 启动包装器：`scripts/run_text2cypher_mcp.py`
+- GraphRAG 启动包装器：`scripts/run_graphrag_mcp.py`
+
+## 2. 推荐部署方案（升级版）
+
+接入火炬 HR 接口后，最佳方案不再是“手工准备 Neo4j 和 GraphRAG 数据后启动服务”，而是拆成两个阶段：
+
+1. **数据重建阶段**：只在首次部署或需要刷新火炬 HR 生产数据后执行。该阶段会从火炬 HR API 导入 MySQL `hr_*` 原始表，重建 MySQL 清洗层，清 Neo4j，删除 GraphRAG 生成目录，然后重建 Neo4j 和 GraphRAG BYOG 数据。
+2. **运行服务阶段**：平时只启动 DeerFlow、MCP、Neo4j、MySQL 等服务，消费已经构建好的图谱和 GraphRAG 数据。不要在每次服务重启时自动重建数据。
+
+仓库已经新增一套 HR Boss Docker 部署骨架：
+
+- `deployment/hr-boss/.env.example`
+- `deployment/hr-boss/extensions_config.docker.json`
+- `deployment/hr-boss/Dockerfile.data-builder`
+- `deployment/hr-boss/sync_huoju_hr_data.py`
+- `deployment/hr-boss/README.md`
+- `docker/docker-compose.hr-boss.yaml`
+
+推荐用 `docker/docker-compose.yaml` 作为 DeerFlow 基座，再叠加 `docker/docker-compose.hr-boss.yaml`：
+
+```bash
+set -a
+. deployment/hr-boss/.env
+set +a
+
+# 首次部署或火炬 HR 数据刷新后执行：重建数据
+docker compose -p hr-boss \
+  -f docker/docker-compose.yaml \
+  -f docker/docker-compose.hr-boss.yaml \
+  --profile rebuild run --build --rm hr-data-builder
+
+# 平时启动运行时服务
+docker compose -p hr-boss \
+  -f docker/docker-compose.yaml \
+  -f docker/docker-compose.hr-boss.yaml \
+  up -d --build nginx frontend gateway text2cypher-mcp hr-graphrag-mcp neo4j mysql
+```
+
+模块划分如下：
+
+| 模块 | 推荐形态 | 说明 |
+| --- | --- | --- |
+| DeerFlow 前后端 | Docker Compose | 仓库已有 `docker/docker-compose.yaml`，入口端口默认 `2026`。 |
+| Gateway | Docker 容器 | Gateway 按 `extensions_config.json` 连接两个内部 HTTP MCP 服务，不再负责拉起 MCP 子进程。 |
+| Text2Cypher MCP | 独立 Compose HTTP 服务 | 通过 `TEXT2CYPHER_REPO` 挂载外部仓库，访问 Neo4j，监听容器内 `8000/mcp`。 |
+| GraphRAG MCP | 独立 Compose HTTP 服务 | 通过 `GRAPHRAG_MCP_REPO` 和 `BYOG_GRAPHRAG_ROOT` 挂载代码与数据，监听容器内 `8000/mcp`。 |
+| hr-data-builder | 只在 `rebuild` profile 中运行 | 从火炬 HR API 导入 MySQL 原始层，重建清洗层，再重建 Neo4j 和 GraphRAG。运行完退出。 |
+| Neo4j | Compose 服务 | Text2Cypher 在线查询和数据重建共同使用。 |
+| MySQL | Compose 服务 | 数据重建阶段必须使用；运行时可保留以便排障和后续增量构建。 |
+
+这仍然是“准一键”方案，因为 `text2cypher`、`graphrag-mcp`、BYOG GraphRAG 项目代码目前不在 DeerFlow 仓库内。服务器上仍需准备这些外部代码目录和 Linux `.venv`。如果要做到只凭 DeerFlow 仓库、火炬 Apifox 配置和 `.env` 完全一键，需要进一步把 Text2Cypher MCP 和 GraphRAG MCP 镜像化，或把外部仓库 vendor 进部署包。
+
+## 3. 服务器目录约定
+
+下面用 Linux 服务器路径举例，实际可按你的机器调整：
+
+```text
+/opt/deer-flow                         # 本仓库
+/opt/hr-mcp/text2cypher                # Text2Cypher MCP 仓库
+/opt/hr-mcp/graphrag-mcp               # GraphRAG MCP 仓库
+/data/hr/apifox                        # 火炬hr.Apifox.json + 火炬token.Apifox.json
+/data/hr/graphrag/byog_graphrag        # GraphRAG 索引数据
+/data/hr/logs/text2cypher              # Text2Cypher MCP 可写日志目录
+/data/deer-flow                        # DeerFlow 运行态数据 DEER_FLOW_HOME
+/data/neo4j                            # Neo4j 数据卷
+/data/mysql                            # MySQL 数据卷
+```
+
+## 4. 基础环境
+
+宿主机建议准备：
+
+- Docker 和 Docker Compose plugin。
+- Git。
+- Python 3.12 和 `uv`，用于初始化 MCP 仓库虚拟环境。
+- Node.js 22 和 pnpm，仅在原生部署前端时需要。
+- 能访问大模型服务的网络，以及对应 API Key。
+
+DeerFlow 后端 Dockerfile 使用 Python 3.12，前端 Dockerfile 使用 Node 22。
+
+## 5. 准备数据服务
+
+### 5.1 火炬 HR 接口配置
+
+当前生产数据来自火炬 HR 接口，服务器需要准备两份 Apifox 导出：
+
+```text
+C:\Users\IT\Desktop\火炬hr.Apifox.json
+C:\Users\IT\Desktop\火炬token.Apifox.json
+```
+
+服务器部署时复制到：
+
+```text
+/data/hr/apifox/火炬hr.Apifox.json
+/data/hr/apifox/火炬token.Apifox.json
+```
+
+`火炬token.Apifox.json` 用于解析 token 获取请求，`火炬hr.Apifox.json` 用于解析 HR 业务接口清单。业务接口默认地址为 `http://192.168.180.51:31606`，token 服务地址由 token Apifox 文件中的绝对 URL 决定。
+
+### 5.2 MySQL
+
+接入火炬 HR 接口后，MySQL 不再只是可选对账依赖，而是**数据构建阶段的中间库**。`hr-data-builder` 会先调用 `import_huoju_hr_mysql.py` 导入 `hr_*` 原始表，再调用 `clean_huoju_hr_mysql.py` 重建 `dim_*`、`fact_*` 和 `dws_employee_profile` 清洗层。
+
+运行时问答主链路仍然不直接访问 MySQL；Text2Cypher 访问 Neo4j，GraphRAG MCP 访问 GraphRAG 数据目录。
+
+### 5.3 Neo4j
+
+Text2Cypher 在线查询依赖 Neo4j。升级后的 Docker overlay 已经包含 `neo4j` 服务。数据重建阶段会清空并重建 Neo4j 图谱；运行阶段只读取该图谱。
+
+### 5.4 GraphRAG 数据
+
+GraphRAG MCP 通过 `GRAPHRAG_DATA_ROOT` 读取已经构建好的 BYOG 数据目录。升级后的 `hr-data-builder` 会删除 `cache`、`hr_agent`、`logs`、`output` 等生成目录，再执行 BYOG `strict-sync-all`。
+
+注意：`scripts/run_graphrag_mcp.py` 只根据 `GRAPHRAG_MCP_REPO` 加载 MCP 代码，数据目录由 `extensions_config.json` 里的 `GRAPHRAG_DATA_ROOT` 决定。
+
+## 6. 准备代码和密钥
+
+```bash
+cd /opt
+git clone <your-deer-flow-repo> deer-flow
+cd /opt/deer-flow
+
+cp .env.example .env
+cp frontend/.env.example frontend/.env
+cp config.example.yaml config.yaml
+cp deployment/hr-boss/extensions_config.docker.json extensions_config.hr-boss.json
+cp deployment/hr-boss/.env.example deployment/hr-boss/.env
+```
+
+在 `deployment/hr-boss/.env` 中至少配置：
+
+```dotenv
+# DeerFlow / hr-boss-agent 模型
+DASHSCOPE_API_KEY=your_model_api_key
+
+# GraphRAG MCP
+ALIBABA_API_KEY=your_alibaba_api_key
+
+# 火炬 HR 接口配置和外部代码目录
+HUOJU_APIFOX_DIR=/data/hr/apifox
+HUOJU_HR_APIFOX_FILE=火炬hr.Apifox.json
+HUOJU_TOKEN_APIFOX_FILE=火炬token.Apifox.json
+HUOJU_API_BASE_URL=http://192.168.180.51:31606
+HUOJU_API_TIMEOUT_SECONDS=30
+HUOJU_RAW_TABLE_PREFIX=hr_
+TEXT2CYPHER_REPO=/opt/hr-mcp/text2cypher
+GRAPHRAG_MCP_REPO=/opt/hr-mcp/graphrag-mcp
+BYOG_GRAPHRAG_ROOT=/data/hr/graphrag/byog_graphrag
+HR_TEXT2CYPHER_LOG_DIR=/data/hr/logs/text2cypher
+
+# MySQL 构建中间库
+MYSQL_ROOT_PASSWORD=replace_with_mysql_root_password
+MYSQL_DATABASE=huoju_hr
+HUOJU_MYSQL_DATABASE=huoju_hr
+MYSQL_USER=hr
+MYSQL_PASSWORD=replace_with_mysql_password
+
+# Text2Cypher / BYOG -> Neo4j
+TEXT2CYPHER_NEO4J_URI=bolt://neo4j:7687
+TEXT2CYPHER_NEO4J_USERNAME=neo4j
+TEXT2CYPHER_NEO4J_PASSWORD=your_password
+TEXT2CYPHER_NEO4J_DATABASE=neo4j
+
+# DeerFlow
+DEER_FLOW_REPO_ROOT=/opt/deer-flow
+DEER_FLOW_HOME=/data/deer-flow
+DEER_FLOW_CONFIG_PATH=/opt/deer-flow/config.yaml
+DEER_FLOW_EXTENSIONS_CONFIG_PATH=/opt/deer-flow/extensions_config.hr-boss.json
+GATEWAY_WORKERS=1
+BETTER_AUTH_SECRET=replace_with_random_hex
+
+# 企业微信入口，可选
+WECOM_BOT_ID=your_wecom_bot_id
+WECOM_BOT_SECRET=your_wecom_bot_secret
+```
+
+HR Boss Docker overlay 会把 `deployment/hr-boss/.env` 作为 Gateway 容器的可选 `env_file` 注入。修改 `WECOM_BOT_ID` 或 `WECOM_BOT_SECRET` 后，重新创建 `gateway` 容器即可让 `config.yaml` 中的 `$WECOM_*` 读取到新值。
+
+如果 Neo4j 不使用 overlay 中的 `neo4j` 服务，而是连接外部 Neo4j，`TEXT2CYPHER_NEO4J_URI` 写真实内网地址，例如 `bolt://10.0.0.12:7687`。
+
+## 7. 配置 `hr-boss-agent`
+
+确认 `backend/.deer-flow/agents/hr-boss-agent/config.yaml` 保持以下关键点：
+
+```yaml
+name: hr-boss-agent
+model: deepseek-v4-pro
+skills:
+  - hr-boss
+mcp_servers:
+  - hr-graphrag-qa
+  - text2cypher
+allowed_tools:
+  - ask_clarification
+  - text2cypher_answer_question
+  - hr-graphrag-qa_query_basic
+  - hr-graphrag-qa_query_local
+  - hr-graphrag-qa_query_global
+  - hr-graphrag-qa_query_drift
+```
+
+不要把 Text2Cypher 的低层调试工具加进 `allowed_tools`。领导问答只暴露 `text2cypher_answer_question`。
+
+## 8. 配置 MCP
+
+### 8.1 原生部署示例
+
+如果 DeerFlow 直接运行在宿主机，`extensions_config.json` 可以写宿主机路径：
+
+```json
+{
+  "mcpServers": {
+    "hr-graphrag-qa": {
+      "enabled": true,
+      "type": "stdio",
+      "command": "/opt/hr-mcp/graphrag-mcp/.venv/bin/python",
+      "args": ["/opt/deer-flow/scripts/run_graphrag_mcp.py"],
+      "env": {
+        "GRAPHRAG_MCP_REPO": "/opt/hr-mcp/graphrag-mcp",
+        "GRAPHRAG_DATA_ROOT": "/data/hr/graphrag/byog_graphrag",
+        "ALIBABA_API_KEY": "$ALIBABA_API_KEY"
+      },
+      "description": "Fixed HR GraphRAG QA MCP server"
+    },
+    "text2cypher": {
+      "enabled": true,
+      "type": "stdio",
+      "command": "/opt/hr-mcp/text2cypher/.venv/bin/python",
+      "args": ["/opt/deer-flow/scripts/run_text2cypher_mcp.py"],
+      "env": {
+        "TEXT2CYPHER_REPO": "/opt/hr-mcp/text2cypher",
+        "TEXT2CYPHER_PROFILE_PATH": "/opt/deer-flow/backend/.deer-flow/agents/hr-boss-agent/text2cypher-profile.md",
+        "TEXT2CYPHER_NEO4J_URI": "$TEXT2CYPHER_NEO4J_URI",
+        "TEXT2CYPHER_NEO4J_USERNAME": "$TEXT2CYPHER_NEO4J_USERNAME",
+        "TEXT2CYPHER_NEO4J_PASSWORD": "$TEXT2CYPHER_NEO4J_PASSWORD",
+        "TEXT2CYPHER_NEO4J_DATABASE": "$TEXT2CYPHER_NEO4J_DATABASE",
+        "TEXT2CYPHER_OPENAI_API_KEY": "$DASHSCOPE_API_KEY",
+        "TEXT2CYPHER_OPENAI_BASE_URL": "https://api.deepseek.com",
+        "TEXT2CYPHER_OPENAI_MODEL": "deepseek-v4-pro",
+        "TEXT2CYPHER_EMPLOYEE_QUERY_ENABLED": "true",
+        "TEXT2CYPHER_TRACE_ENABLED": "true"
+      },
+      "description": "Local Text2Cypher engine via MCP"
+    }
+  },
+  "skills": {}
+}
+```
+
+`TEXT2CYPHER_EMPLOYEE_QUERY_ENABLED=true` exposes `text2cypher_query_employees`.
+Disabling it removes only that preset employee-filtering tool; `text2cypher_answer_question`
+remains available.
+
+### 8.2 Docker 部署示例
+
+Docker 生产 compose 默认只挂载 DeerFlow 自身目录。新增的 `docker/docker-compose.hr-boss.yaml` 已经负责：
+
+- 增加 `mysql` 服务。
+- 增加 `neo4j` 服务。
+- 增加只在 `rebuild` profile 运行的 `hr-data-builder` 服务。
+- 增加独立的 `text2cypher-mcp` 和 `hr-graphrag-mcp` HTTP 服务。
+- 给两个 MCP 服务挂载各自代码、数据和日志目录，并注入运行环境变量。
+- 让 `gateway` 等待两个 MCP 健康后，通过内部服务 URL 连接。
+
+Docker 版 MCP 配置使用：
+
+```text
+deployment/hr-boss/extensions_config.docker.json
+```
+
+部署时建议复制到不被 Git 管理的运行时路径：
+
+```bash
+cp deployment/hr-boss/extensions_config.docker.json extensions_config.hr-boss.json
+```
+
+并在 `deployment/hr-boss/.env` 中设置：
+
+```dotenv
+DEER_FLOW_EXTENSIONS_CONFIG_PATH=/opt/deer-flow/extensions_config.hr-boss.json
+```
+
+## 9. 配置 DeerFlow 主配置
+
+`config.yaml` 需要确认：
+
+```yaml
+models:
+  - name: deepseek-v4-pro
+    use: deerflow.models.patched_deepseek:PatchedChatDeepSeek
+    model: deepseek-v4-pro
+    api_base: https://api.deepseek.com
+    api_key: $DASHSCOPE_API_KEY
+
+database:
+  backend: sqlite
+  sqlite_dir: .deer-flow/data
+
+channels:
+  langgraph_url: http://localhost:8001/api
+  gateway_url: http://localhost:8001
+  session:
+    assistant_id: hr-boss-agent
+    config:
+      recursion_limit: 100
+    context:
+      thinking_enabled: true
+      is_plan_mode: false
+      subagent_enabled: false
+  wecom:
+    enabled: true
+    bot_id: $WECOM_BOT_ID
+    bot_secret: $WECOM_BOT_SECRET
+    working_message: 正在查询 HR 数据，请稍候...
+```
+
+单机首版可以用 SQLite。多实例生产部署再切 PostgreSQL，并设置 `DATABASE_URL` 和 `UV_EXTRAS=postgres`。
+
+## 10. 初始化 MCP 仓库
+
+以下命令在宿主机执行，具体依赖安装以各 MCP 仓库自己的 README 为准：
+
+```bash
+cd /opt/hr-mcp/text2cypher
+test -f scripts/run_text2cypher_mcp.py || test -f text2cypher/adapters/mcp/server.py
+rm -rf .venv
+docker run --rm -v "$PWD":/work -w /work python:3.12-slim-bookworm \
+  sh -lc 'python -m venv --copies .venv && . .venv/bin/activate && pip install -U pip && pip install -e .'
+test -x .venv/bin/python
+
+cd /opt/hr-mcp/graphrag-mcp
+test -d src
+rm -rf .venv
+docker run --rm -v "$PWD":/work -w /work python:3.12-slim-bookworm \
+  sh -lc 'python -m venv --copies .venv && . .venv/bin/activate && pip install -U pip && pip install -e .'
+test -x .venv/bin/python
+```
+
+如果这里任意一个 `test -x .venv/bin/python` 失败，对应 HTTP MCP 容器就无法启动，日志会出现类似 `No such file or directory: '/opt/hr-mcp/graphrag-mcp/.venv/bin/python'`。
+
+不要只在宿主机执行 `uv sync` 后检查软链接是否存在。`uv sync` 创建的 `.venv/bin/python` 可能指向宿主机的 `/root/.local/share/uv/...`，该路径在 MCP 服务容器内不存在，会导致宿主机看着存在、容器里启动失败。
+
+快速检查启动包装器：
+
+```bash
+cd /opt/deer-flow
+
+GRAPHRAG_MCP_REPO=/opt/hr-mcp/graphrag-mcp \
+GRAPHRAG_DATA_ROOT=/data/hr/graphrag/byog_graphrag \
+ALIBABA_API_KEY=your_alibaba_api_key \
+MCP_TRANSPORT=streamable-http \
+MCP_HOST=127.0.0.1 \
+MCP_PORT=8002 \
+/opt/hr-mcp/graphrag-mcp/.venv/bin/python scripts/run_graphrag_mcp.py
+```
+
+```bash
+cd /opt/deer-flow
+
+TEXT2CYPHER_REPO=/opt/hr-mcp/text2cypher \
+TEXT2CYPHER_PROFILE_PATH=/opt/deer-flow/backend/.deer-flow/agents/hr-boss-agent/text2cypher-profile.md \
+TEXT2CYPHER_NEO4J_URI=bolt://127.0.0.1:7687 \
+TEXT2CYPHER_NEO4J_USERNAME=neo4j \
+TEXT2CYPHER_NEO4J_PASSWORD=your_password \
+TEXT2CYPHER_NEO4J_DATABASE=neo4j \
+TEXT2CYPHER_OPENAI_API_KEY=your_model_api_key \
+MCP_TRANSPORT=streamable-http \
+MCP_HOST=127.0.0.1 \
+MCP_PORT=8001 \
+/opt/hr-mcp/text2cypher/.venv/bin/python scripts/run_text2cypher_mcp.py
+```
+
+这两个命令分别启动本机 `http://127.0.0.1:8002/mcp` 和 `http://127.0.0.1:8001/mcp`。包装器默认仍是 `stdio`，只有设置 `MCP_TRANSPORT=http` 或 `streamable-http` 才会监听网络端口。检查后 `Ctrl+C` 退出。
+
+## 11. 数据重建与启动
+
+### 11.1 加载部署环境变量
+
+```bash
+cd /opt/deer-flow
+
+set -a
+. deployment/hr-boss/.env
+set +a
+```
+
+### 11.2 首次部署或火炬 HR 数据刷新后：重建数据
+
+这是重建步骤，会刷新 MySQL 原始表、重建 MySQL 清洗层、清 Neo4j、删除 GraphRAG 生成目录，然后从清洗层重建 Neo4j 和 GraphRAG。
+
+`hr-data-builder` 容器入口是 `deployment/hr-boss/sync_huoju_hr_data.py --force`，实际执行顺序如下：
+
+1. 前置检查：确认 `HUOJU_APIFOX_DIR` 下存在 `火炬hr.Apifox.json` 和 `火炬token.Apifox.json`，确认 `GRAPHRAG_DATA_ROOT` 指向有效 BYOG 项目目录，确认导入和清洗脚本存在。
+2. 导入原始层：执行 `backend/scripts/import_huoju_hr_mysql.py`，从火炬 HR API 拉取生产数据，写入 MySQL `hr_*` 原始表，默认库名是 `huoju_hr`。
+3. 重建清洗层：执行 `backend/scripts/clean_huoju_hr_mysql.py`，从原始 `hr_*` 表重建 `dim_*`、`fact_*`、`dws_employee_profile` 和 `dq_hr_cleaning_errors`。
+4. 清空 Neo4j：导入和清洗成功后，删除 Neo4j 中现有 HR 图谱节点、关系、非 lookup 索引和约束。
+5. 清理 GraphRAG 生成目录：删除 `GRAPHRAG_DATA_ROOT` 下的 `cache`、`hr_agent`、`logs`、`output`，保留 BYOG 项目配置和源码文件。
+6. 同步图谱与索引：在 `GRAPHRAG_DATA_ROOT` 下执行 `python -m byog_graphrag.cli strict-sync-all`，从 MySQL 清洗层重新写入 Neo4j，并重新生成 GraphRAG 数据。
+7. 完成后启动运行时服务：Text2Cypher 读取新的 Neo4j 图谱，GraphRAG MCP 读取新的 `GRAPHRAG_DATA_ROOT`。
+
+注意：脚本会先完成火炬 API 导入和 MySQL 清洗，再清 Neo4j 和 GraphRAG。这样接口失败或清洗失败时，不会先把线上可用图谱删掉。
+
+```bash
+ls -la /data/hr/apifox
+
+docker compose -p hr-boss \
+  -f docker/docker-compose.yaml \
+  -f docker/docker-compose.hr-boss.yaml \
+  --profile rebuild run --build --rm hr-data-builder
+```
+
+重建完成后，Neo4j 和 GraphRAG 数据目录就成为运行时数据源。
+
+重建日志里建议重点确认这些关键输出：
+
+```text
+Huoju HR sync start
+Preflight OK: Huoju HR Apifox export=...
+import_huoju_hr_mysql.py ...
+clean_huoju_hr_mysql.py ...
+Neo4j cleared: deleted_nodes=...
+Remove GraphRAG generated directory: ...
+byog_graphrag.cli strict-sync-all ...
+Huoju HR sync complete
+```
+
+### 11.3 平时启动运行时服务
+
+```bash
+docker compose -p hr-boss \
+  -f docker/docker-compose.yaml \
+  -f docker/docker-compose.hr-boss.yaml \
+  up -d --build nginx frontend gateway text2cypher-mcp hr-graphrag-mcp neo4j mysql
+```
+
+查看日志：
+
+```bash
+docker compose -p hr-boss -f docker/docker-compose.yaml -f docker/docker-compose.hr-boss.yaml logs -f gateway
+docker compose -p hr-boss -f docker/docker-compose.yaml -f docker/docker-compose.hr-boss.yaml logs -f text2cypher-mcp hr-graphrag-mcp
+docker compose -p hr-boss -f docker/docker-compose.yaml -f docker/docker-compose.hr-boss.yaml logs -f hr-data-builder
+```
+
+停止：
+
+```bash
+docker compose -p hr-boss -f docker/docker-compose.yaml -f docker/docker-compose.hr-boss.yaml down
+```
+
+### 11.4 原生启动
+
+```bash
+cd /opt/deer-flow
+make install
+make start-daemon
+```
+
+原生生产建议再用 systemd 或进程守护工具托管 `make start` 对应的 Gateway/Frontend 进程，避免 SSH 退出后服务停止。
+
+## 12. 验证清单
+
+1. DeerFlow 网页可访问：
+
+```bash
+curl -f http://127.0.0.1:2026/health
+```
+
+2. MCP 配置可读，并且敏感值被掩码：
+
+```bash
+curl -s http://127.0.0.1:2026/api/mcp/config
+```
+
+3. 在 UI 里选择或进入 `hr-boss-agent`，提一个 Text2Cypher 问题：
+
+```text
+福建火炬电子科技股份有限公司平均年龄是多少？
+```
+
+预期：走精确查询；如果年龄字段不可用，应说明数据限制，不要改走 GraphRAG 估算。
+
+4. 提一个 GraphRAG 问题：
+
+```text
+福建火炬电子科技股份有限公司的人才结构有什么特点？
+```
+
+预期：走 GraphRAG global，回答组织画像、结构特点和证据限制。
+
+5. 如启用企业微信，重启 Gateway 后观察日志应出现渠道启动信息，并在企业微信提同样问题验证回包。
+
+## 13. 常见故障
+
+| 现象 | 重点检查 |
+| --- | --- |
+| Gateway 启动后 MCP 工具不可用 | `extensions_config.json` 中对应 MCP 是否 `enabled: true`；两个 MCP 服务是否健康；Gateway 是否能解析并访问 `http://text2cypher-mcp:8000/mcp` 和 `http://hr-graphrag-mcp:8000/mcp`。 |
+| Docker 内 MCP 路径不存在 | 对应 MCP 服务的 `volumes` 是否挂载了仓库和数据目录；不要把这些挂载继续放在 `gateway`。 |
+| `No such file or directory: '/opt/hr-mcp/.../.venv/bin/python'` | 对应外部 MCP 仓库的 `.venv/bin/python` 在 MCP 服务容器内不可执行。常见原因是宿主机 `uv sync` 生成了指向 `/root/.local/share/uv/...` 的软链接；用 `python -m venv --copies` 在 Docker 一次性容器里重建 `.venv`。 |
+| `Text2Cypher launcher not found under: /opt/hr-mcp/text2cypher` | `TEXT2CYPHER_REPO` 指向的不是完整 Text2Cypher 仓库。当前包装器支持 `scripts/run_text2cypher_mcp.py` 或包内 `text2cypher/adapters/mcp/server.py` 两种结构，至少要存在一种。 |
+| `Failed to write text2cypher MCP call log` / `Read-only file system: '/opt/hr-mcp/text2cypher/logs'` | Text2Cypher 默认想把日志写回只读挂载的 MCP 仓库。设置 `HR_TEXT2CYPHER_LOG_DIR=/data/hr/logs/text2cypher`，并让 `TEXT2CYPHER_LOG_PATH`、`TEXT2CYPHER_MCP_CALL_LOG_PATH`、`TEXT2CYPHER_TRACE_PATH` 指向 `/data/hr/logs/text2cypher` 下。 |
+| 企微消息触发 `langgraph_sdk.errors.AuthenticationError: 401 Unauthorized` | `GATEWAY_WORKERS` 应设为 `1`。当前内部频道调用使用进程内随机 token，多 worker 下请求可能被另一个 worker 接住导致 token 不匹配。 |
+| `Huoju HR Apifox export does not exist` / `Huoju token Apifox export does not exist` | 检查 `deployment/hr-boss/.env` 中的 `HUOJU_APIFOX_DIR`、`HUOJU_HR_APIFOX_FILE`、`HUOJU_TOKEN_APIFOX_FILE`；宿主机目录会挂载为容器内 `/data/hr/apifox`。 |
+| Text2Cypher 查询失败 | Neo4j 地址、用户名、密码、数据库名；Neo4j 是否允许 Bolt 访问；HR 图谱是否已导入。 |
+| GraphRAG 回答无证据 | `GRAPHRAG_DATA_ROOT` 是否指向当前 BYOG 数据；数据目录是否挂入容器；GraphRAG MCP 仓库依赖是否安装。 |
+| 领导问答输出底层 Cypher 或 JSON | 检查 `hr-boss-agent/config.yaml` 的 `allowed_tools`，不要暴露低层 Text2Cypher 工具；检查 `skills/custom/hr-boss/SKILL.md` 是否仍是唯一编排合同。 |
+| 企业微信无响应 | `.env` 中 `WECOM_BOT_ID/WECOM_BOT_SECRET`；`config.yaml.channels.wecom.enabled`；`channels.session.assistant_id` 是否为 `hr-boss-agent`；Gateway 是否重启。 |
+| MySQL 不通但 hr-boss 仍可问答 | 这是正常的，当前主链路不直接访问 MySQL。只有构建/对账/XiYan 链路需要 MySQL。 |
+
+## 14. 上线前检查
+
+- `text2cypher-mcp` 独立 HTTP 服务健康，Gateway 能发现其工具。
+- `hr-graphrag-mcp` 独立 HTTP 服务健康，Gateway 能发现其工具。
+- Neo4j 内 HR 图谱数据和 `text2cypher-profile.md` 使用同一业务口径。
+- `GRAPHRAG_DATA_ROOT` 指向本次演示要用的 GraphRAG 数据快照。
+- `hr-boss-agent` 只挂载 `hr-boss` skill、`hr-graphrag-qa`、`text2cypher`。
+- 精确查询问题能回答或明确说明限制。
+- GraphRAG 画像问题能回答并说明证据边界。
+- 如走企业微信，已经通过企业微信原通道演练至少一次。
+
+
+
+## 部署：
+
+对，大方向是对的：**这两个命令就是部署的两个核心动作**。
+
+但更准确地说，不是“把代码复制到服务器后立刻运行这两个命令就一定成功”，而是：
+
+1. 先把 DeerFlow 仓库放到服务器，比如 `/opt/deer-flow`
+2. 准备并填写这些文件：
+   `config.yaml`、`frontend/.env`、`extensions_config.hr-boss.json`、`deployment/hr-boss/.env`
+3. 把火炬 HR 和 token Apifox 导出放到 `.env` 指定的位置：
+   `/data/hr/apifox/火炬hr.Apifox.json`
+   `/data/hr/apifox/火炬token.Apifox.json`
+4. 服务器上还要有外部 MCP 代码目录：
+   `/opt/hr-mcp/text2cypher`
+   `/opt/hr-mcp/graphrag-mcp`
+   `/data/hr/graphrag/byog_graphrag`
+5. `text2cypher` 和 `graphrag-mcp` 运行时还需要准备好 Linux 环境里的 `.venv`，对应独立 MCP 服务容器会使用它们的 `.venv/bin/python` 启动 HTTP 服务。
+
+然后运行你贴的两个命令。
+
+第一个命令：
+
+```bash
+docker compose --env-file deployment/hr-boss/.env -p hr-boss \
+  -f docker/docker-compose.yaml \
+  -f docker/docker-compose.hr-boss.yaml \
+  --profile rebuild run --build --rm hr-data-builder
+```
+
+作用是**重建数据**：从火炬 HR API 导入 MySQL 原始表，重建 MySQL 清洗层，清 Neo4j、清 GraphRAG 生成目录，再执行 BYOG 同步。这个只在首次部署或火炬 HR 数据需要刷新后跑，不要每次重启都跑。
+
+第二个命令：
+
+```bash
+docker compose --env-file deployment/hr-boss/.env -p hr-boss \
+  -f docker/docker-compose.yaml \
+  -f docker/docker-compose.hr-boss.yaml \
+  up -d --build nginx frontend gateway text2cypher-mcp hr-graphrag-mcp neo4j mysql
+```
+
+作用是启动正式运行服务。
+
+还有一个容易漏的小点：这两个命令前要先加载部署环境变量，或者直接加 `--env-file`。推荐更稳的写法是：
+
+```bash
+docker compose --env-file deployment/hr-boss/.env -p hr-boss ...
+```
+
+所以结论是：**前置文件、路径、密钥、外部 MCP 仓库都准备好之后，这两个命令跑通，就可以认为部署完成。** 跑完后再看 `gateway` 日志，确认 MCP 没有路径或依赖错误，然后访问 `http://服务器IP:2026` 测试 `hr-boss-agent`。
+
+查看 Gateway 日志：
+
+```bash
+docker compose --env-file deployment/hr-boss/.env -p hr-boss \
+  -f docker/docker-compose.yaml \
+  -f docker/docker-compose.hr-boss.yaml \
+  logs -f --tail=100 gateway
+```
+
+```shell
+docker compose --env-file deployment/hr-boss/.env -p hr-boss \
+  -f docker/docker-compose.yaml \
+  -f docker/docker-compose.hr-boss.yaml \
+  up -d --force-recreate gateway
+```
+
+```sh
+docker compose --env-file deployment/hr-boss/.env -p hr-boss \
+  -f docker/docker-compose.yaml \
+  -f docker/docker-compose.hr-boss.yaml \
+  up -d --build hr-graphrag-mcp gateway
+```
+
+
+
+
+
+
+
+## 离线部署方式：
+
+本地构建：
+
+```powershell
+cd D:\python_project\deer-flow
+.\deployment\hr-boss\build-offline-bundle.ps1 `
+  -HrMcpSuiteRoot D:\study\my-mcp\hr-mcp-suite `
+  -AptMirror mirrors.aliyun.com `
+  -PipIndexUrl https://mirrors.aliyun.com/pypi/simple/ `
+  -UvIndexUrl https://mirrors.aliyun.com/pypi/simple/ `
+  -NpmRegistry https://registry.npmmirror.com
+```
+
+上传：
+
+```powershell
+dist/hr-boss-offline/hr-boss-images.tar
+dist/hr-boss-offline/hr-boss-deploy-bundle.tgz
+```
+
+服务器部署：
+
+```sh
+mkdir -p /opt/hr-boss
+tar -xzf hr-boss-deploy-bundle.tgz -C /opt/hr-boss
+cp hr-boss-images.tar /opt/hr-boss/
+cd /opt/hr-boss
+bash load-and-run.sh hr-boss-images.tar  # 第一次运行生成配置文件，deployment/hr-boss/.env deployment/hr-boss/config.hr-boss.yaml 第二次直接docker 加载运行
+```
+
+离线包启动运行时服务后，首次部署或火炬 HR 数据刷新时，单独执行数据重建：
+
+```sh
+cd /opt/hr-boss
+
+docker compose --env-file deployment/hr-boss/.env -p hr-boss \
+  -f docker/docker-compose.hr-boss.offline.yaml \
+  --profile rebuild run --rm hr-data-builder
+```
+
+这条离线命令和在线 overlay 的重建逻辑相同，都会进入 `sync_huoju_hr_data.py --force`：先从火炬 HR API 写入 MySQL 原始层，再重建清洗层，随后清 Neo4j、清 GraphRAG 生成目录，并执行 BYOG `strict-sync-all`。确认日志出现 `Huoju HR sync complete` 后，再验证 `gateway`、`text2cypher-mcp` 和 `hr-graphrag-mcp`。
+
+查看gateway日志
+
+```sh
+cd /opt/hr-boss
+
+docker compose --env-file deployment/hr-boss/.env -p hr-boss \
+  -f docker/docker-compose.hr-boss.offline.yaml \
+  logs -f --tail=100 gateway
+```
+
+查看mcp日志
+
+```sh
+docker compose --env-file deployment/hr-boss/.env -p hr-boss \
+  -f docker/docker-compose.hr-boss.offline.yaml \
+  logs -f --tail=100 text2cypher-mcp hr-graphrag-mcp
+```
+
+重建gateway
+
+```sh
+docker compose --env-file deployment/hr-boss/.env -p hr-boss \
+  -f docker/docker-compose.hr-boss.offline.yaml \
+  up -d --force-recreate --no-deps gateway
+```
+
+服务器重新加载镜像，重建容器
+
+```sh
+# 加载新镜像
+docker load -i hr-boss-images.tar
+
+# 重建使用新镜像的容器
+docker compose --env-file deployment/hr-boss/.env -p hr-boss \
+  -f docker/docker-compose.hr-boss.offline.yaml \
+  up -d --force-recreate
+```
+
+
+
+本地数据重建命令如下。
+
+```
+# 1. 接口数据导入 MySQL 原始层
+cd D:\python_project\deer-flow
+
+$mysqlPassword = "<mysql-password>"
+
+python backend/scripts/import_huoju_hr_mysql.py `
+  --apifox "C:\Users\IT\Desktop\火炬hr.Apifox.json" `
+  --token-apifox "C:\Users\IT\Desktop\火炬token.Apifox.json" `
+  --api-base-url "http://192.168.180.51:31606" `
+  --mysql-host "127.0.0.1" `
+  --mysql-port 3306 `
+  --mysql-user "root" `
+  --mysql-password $mysqlPassword `
+  --database "huoju_hr"
+# 2. MySQL 原始层清洗到 dim/fact/dws/dq 表
+cd D:\python_project\deer-flow
+
+python backend/scripts/clean_huoju_hr_mysql.py `
+  --mysql-host "127.0.0.1" `
+  --mysql-port 3306 `
+  --mysql-user "root" `
+  --mysql-password $mysqlPassword `
+  --database "huoju_hr" `
+  --as-of-date "2026-07-06"
+# 3. 从清洗层重建 Neo4j + GraphRAG
+# 会校验清洗层、清空 Neo4j、删除 byog_graphrag 的 input/cache/hr_agent/logs/output，
+# 然后重建 GraphRAG parquet、lancedb，以及现在自动生成 community_reports.csv。
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Users\IT\Desktop\hr知识图谱\rebuild_hr_kg.ps1" -Force -MySqlDatabase huoju_hr
+```
