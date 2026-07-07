@@ -1,0 +1,397 @@
+"use client";
+
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  ActivityIcon,
+  AlertCircleIcon,
+  RefreshCwIcon,
+  SearchIcon,
+  UploadIcon,
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  useMonitoringConversation,
+  useMonitoringConversations,
+  useMonitoringRunTimeline,
+  type MonitoringRunTimeline,
+  type MonitoringTimelineEvent,
+} from "@/core/platform";
+
+import { ConversationDetail } from "./conversation-detail";
+import { ConversationList } from "./conversation-list";
+import { eventKey, preferredEventKey } from "./format";
+import { ImportRunDialog } from "./import-run-dialog";
+import { RunInspectionDialog } from "./run-inspection-dialog";
+
+const SOURCE_OPTIONS = [
+  "all",
+  "web",
+  "feishu",
+  "dingtalk",
+  "wecom",
+  "wechat",
+  "slack",
+  "telegram",
+  "discord",
+] as const;
+
+const STATUS_OPTIONS = [
+  "all",
+  "running",
+  "success",
+  "error",
+  "timeout",
+  "interrupted",
+] as const;
+
+const EMPTY_EVENTS: MonitoringTimelineEvent[] = [];
+
+function displayError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function AgentMonitoringPage() {
+  const queryClient = useQueryClient();
+  const [filters, setFilters] = useState({
+    limit: 50,
+    offset: 0,
+    q: "",
+    source: "",
+    status: "",
+    agent_name: "",
+    tool_name: "",
+    mcp_server_name: "",
+    from: "",
+    to: "",
+  });
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [selectedEventKey, setSelectedEventKey] = useState<string | null>(null);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [runInspectionOpen, setRunInspectionOpen] = useState(false);
+  const [importedTimeline, setImportedTimeline] =
+    useState<MonitoringRunTimeline | null>(null);
+
+  const conversations = useMonitoringConversations(filters);
+  const liveThreadId = importedTimeline ? null : selectedThreadId;
+  const liveRunId = importedTimeline ? null : selectedRunId;
+  const conversationDetail = useMonitoringConversation(liveThreadId);
+  const liveTimeline = useMonitoringRunTimeline(liveRunId);
+  const activeTimeline = importedTimeline ?? liveTimeline.timeline;
+  const activeIdentity =
+    activeTimeline?.identity ??
+    conversationDetail.conversation?.identity ??
+    null;
+  const events = activeTimeline?.events ?? EMPTY_EVENTS;
+  const isRunTimelineLoading =
+    importedTimeline || liveTimeline.error
+      ? false
+      : liveTimeline.isLoading ||
+        (runInspectionOpen && Boolean(selectedRunId) && !activeTimeline);
+  const selectedEvent = useMemo(() => {
+    if (!selectedEventKey) return null;
+    return (
+      events.find(
+        (event, index) => eventKey(event, index) === selectedEventKey,
+      ) ?? null
+    );
+  }, [events, selectedEventKey]);
+  const liveError =
+    conversations.error ?? conversationDetail.error ?? liveTimeline.error;
+
+  function clearDrillDown() {
+    setImportedTimeline(null);
+    setSelectedThreadId(null);
+    setSelectedRunId(null);
+    setSelectedEventKey(null);
+    setRunInspectionOpen(false);
+  }
+
+  function updateFilters(patch: Partial<typeof filters>) {
+    clearDrillDown();
+    setFilters((current) => ({
+      ...current,
+      ...patch,
+      offset: 0,
+    }));
+  }
+
+  useEffect(() => {
+    if (
+      importedTimeline ||
+      selectedThreadId ||
+      conversations.page.items.length === 0
+    ) {
+      return;
+    }
+
+    const first = conversations.page.items[0];
+    if (!first) return;
+
+    setSelectedThreadId(first.thread_id);
+    setSelectedRunId(first.latest_run_id ?? first.run_id ?? null);
+    setSelectedEventKey(null);
+  }, [conversations.page.items, importedTimeline, selectedThreadId]);
+
+  useEffect(() => {
+    if (importedTimeline || selectedRunId || !conversationDetail.conversation) {
+      return;
+    }
+
+    const firstRun = conversationDetail.conversation.runs[0];
+    if (firstRun) {
+      setSelectedRunId(firstRun.run_id);
+    }
+  }, [conversationDetail.conversation, importedTimeline, selectedRunId]);
+
+  useEffect(() => {
+    if (events.length === 0) {
+      if (selectedEventKey !== null) {
+        setSelectedEventKey(null);
+      }
+      return;
+    }
+
+    const exists = selectedEventKey
+      ? events.some(
+          (event, index) => eventKey(event, index) === selectedEventKey,
+        )
+      : false;
+    if (!exists) {
+      setSelectedEventKey(preferredEventKey(events));
+    }
+  }, [events, selectedEventKey]);
+
+  function handleSelectThread(threadId: string, latestRunId: string | null) {
+    setImportedTimeline(null);
+    setSelectedThreadId(threadId);
+    setSelectedRunId(latestRunId);
+    setSelectedEventKey(null);
+    setRunInspectionOpen(false);
+  }
+
+  function handleSelectRun(runId: string) {
+    setImportedTimeline(null);
+    setSelectedRunId(runId);
+    setSelectedEventKey(null);
+    setRunInspectionOpen(true);
+  }
+
+  function handleImported(timeline: MonitoringRunTimeline) {
+    setImportedTimeline(timeline);
+    setSelectedThreadId(null);
+    setSelectedRunId(timeline.run.run_id);
+    setSelectedEventKey(
+      timeline.events[0] ? eventKey(timeline.events[0], 0) : null,
+    );
+    setRunInspectionOpen(true);
+  }
+
+  function handleRefresh() {
+    void queryClient.invalidateQueries({
+      queryKey: ["platform", "admin", "monitoring"],
+    });
+  }
+
+  return (
+    <main className="bg-background flex h-screen min-h-0 flex-col">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-3">
+        <div className="min-w-0">
+          <h1 className="truncate text-base font-semibold">Agent monitoring</h1>
+          <div className="text-muted-foreground mt-0.5 text-xs">
+            {conversations.page.total} conversations
+          </div>
+        </div>
+
+        <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+          <div className="relative min-w-[220px] flex-1 sm:max-w-xs">
+            <SearchIcon className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
+            <Input
+              className="pl-9"
+              placeholder="Search"
+              value={filters.q}
+              onChange={(event) =>
+                updateFilters({
+                  q: event.target.value,
+                })
+              }
+            />
+          </div>
+
+          <Input
+            aria-label="Agent"
+            className="w-[150px]"
+            placeholder="Agent"
+            value={filters.agent_name}
+            onChange={(event) =>
+              updateFilters({
+                agent_name: event.target.value,
+              })
+            }
+          />
+
+          <Input
+            aria-label="Tool"
+            className="w-[150px]"
+            placeholder="Tool"
+            value={filters.tool_name}
+            onChange={(event) =>
+              updateFilters({
+                tool_name: event.target.value,
+              })
+            }
+          />
+
+          <Input
+            aria-label="MCP"
+            className="w-[150px]"
+            placeholder="MCP"
+            value={filters.mcp_server_name}
+            onChange={(event) =>
+              updateFilters({
+                mcp_server_name: event.target.value,
+              })
+            }
+          />
+
+          <Input
+            aria-label="From"
+            className="w-[190px]"
+            type="datetime-local"
+            value={filters.from}
+            onChange={(event) =>
+              updateFilters({
+                from: event.target.value,
+              })
+            }
+          />
+
+          <Input
+            aria-label="To"
+            className="w-[190px]"
+            type="datetime-local"
+            value={filters.to}
+            onChange={(event) =>
+              updateFilters({
+                to: event.target.value,
+              })
+            }
+          />
+
+          <Select
+            value={filters.source || "all"}
+            onValueChange={(value) =>
+              updateFilters({
+                source: value === "all" ? "" : value,
+              })
+            }
+          >
+            <SelectTrigger className="w-[136px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SOURCE_OPTIONS.map((source) => (
+                <SelectItem key={source} value={source}>
+                  {source === "all" ? "All sources" : source}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select
+            value={filters.status || "all"}
+            onValueChange={(value) =>
+              updateFilters({
+                status: value === "all" ? "" : value,
+              })
+            }
+          >
+            <SelectTrigger className="w-[136px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {STATUS_OPTIONS.map((status) => (
+                <SelectItem key={status} value={status}>
+                  {status === "all" ? "All status" : status}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Button type="button" variant="outline" onClick={handleRefresh}>
+            <RefreshCwIcon className="size-4" />
+            Refresh
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={!selectedRunId}
+            onClick={() => setRunInspectionOpen(true)}
+          >
+            <ActivityIcon className="size-4" />
+            Inspect run
+          </Button>
+          <Button type="button" onClick={() => setImportDialogOpen(true)}>
+            <UploadIcon className="size-4" />
+            Import
+          </Button>
+        </div>
+
+        {liveError && (
+          <Alert className="w-full py-2" variant="destructive">
+            <AlertCircleIcon />
+            <AlertTitle>Monitoring unavailable</AlertTitle>
+            <AlertDescription>{displayError(liveError)}</AlertDescription>
+          </Alert>
+        )}
+      </header>
+
+      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[360px_minmax(520px,1fr)]">
+        <ConversationList
+          items={conversations.page.items}
+          selectedThreadId={selectedThreadId}
+          isLoading={conversations.isLoading}
+          onSelectThread={handleSelectThread}
+        />
+        <ConversationDetail
+          conversation={
+            importedTimeline ? null : conversationDetail.conversation
+          }
+          selectedRunId={selectedRunId}
+          isLoading={importedTimeline ? false : conversationDetail.isLoading}
+          onSelectRun={handleSelectRun}
+        />
+      </div>
+
+      <RunInspectionDialog
+        open={runInspectionOpen}
+        onOpenChange={setRunInspectionOpen}
+        runId={selectedRunId}
+        identity={activeIdentity}
+        timeline={activeTimeline}
+        selectedEventKey={selectedEventKey}
+        onSelectEventKey={setSelectedEventKey}
+        selectedEvent={selectedEvent}
+        isLoading={isRunTimelineLoading}
+        isImported={Boolean(importedTimeline)}
+      />
+
+      <ImportRunDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        onImported={handleImported}
+      />
+    </main>
+  );
+}

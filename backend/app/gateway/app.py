@@ -25,6 +25,8 @@ from app.gateway.routers import (
     mcp,
     memory,
     models,
+    platform_admin,
+    platform_agents,
     runs,
     scheduled_tasks,
     skills,
@@ -441,6 +443,10 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)
+
+    # Enterprise platform APIs are mounted at /api/platform
+    app.include_router(platform_admin.router)
+    app.include_router(platform_agents.router)
 
     # Suggestions API is mounted at /api/threads/{thread_id}/suggestions
     app.include_router(suggestions.router)
