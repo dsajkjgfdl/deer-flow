@@ -94,7 +94,7 @@ $env:PYTHONPATH=".;packages/harness"
 | --- | --- | --- | --- |
 | Gateway services | Review | `backend/app/gateway/services.py` | 上游新增 wait disconnect、workspace changes、scheduled tasks 等逻辑，不能用旧文件覆盖。 |
 | Thread runs router | Review | `backend/app/gateway/routers/thread_runs.py` | 先确认本地改动是否仍有必要。 |
-| Agent factory/runtime resolver | Review | `backend/packages/harness/deerflow/agents/factory.py`, `runtime_resolver.py` | 优先保留上游结构，再增量接入本地 agent catalog。 |
+| Agent factory/runtime resolver | Keep | `backend/app/gateway/services.py`, `backend/packages/harness/deerflow/agents/runtime_resolver.py`, `backend/packages/harness/deerflow/agents/lead_agent/agent.py`, `backend/packages/harness/deerflow/tools/tools.py`, `backend/tests/test_agent_runtime_resolver.py`, `backend/tests/test_tools_runtime_policy.py` | 运行时 agent 分配生效链路已迁移：平台分配解析有效 agent，并把 MCP/技能/工具白名单写入运行配置供 lead agent 消费。 |
 | Run journal/tool audit | Review | `backend/packages/harness/deerflow/runtime/journal.py`, `runtime/runs/*` | 与平台监控需求绑定迁移。 |
 
 Recommended verification:

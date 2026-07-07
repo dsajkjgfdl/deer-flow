@@ -405,9 +405,15 @@ def build_middlewares(
     return middlewares
 
 
-def _available_skill_names(agent_config, is_bootstrap: bool) -> set[str] | None:
+def _available_skill_names(
+    agent_config,
+    is_bootstrap: bool,
+    effective_skills: list[str] | None = None,
+) -> set[str] | None:
     if is_bootstrap:
         return set(_BOOTSTRAP_SKILL_NAMES)
+    if effective_skills is not None:
+        return set(effective_skills)
     if agent_config and agent_config.skills is not None:
         return set(agent_config.skills)
     return None
@@ -462,7 +468,18 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     agent_name = validate_agent_name(cfg.get("agent_name"))
 
     agent_config = load_agent_config(agent_name) if not is_bootstrap else None
-    available_skills = _available_skill_names(agent_config, is_bootstrap)
+    effective_skills = cfg.get("effective_skills")
+    effective_mcp_servers = cfg.get("effective_mcp_servers")
+    if effective_mcp_servers is None and agent_config and agent_config.mcp_servers is not None:
+        effective_mcp_servers = agent_config.mcp_servers
+    effective_allowed_tools = cfg.get("effective_allowed_tools")
+    if effective_allowed_tools is None and agent_config and agent_config.allowed_tools is not None:
+        effective_allowed_tools = agent_config.allowed_tools
+    available_skills = _available_skill_names(
+        agent_config,
+        is_bootstrap,
+        effective_skills=effective_skills,
+    )
     # Custom agent model from agent config (if any), or None to let _resolve_model_name pick the default
     agent_model_name = agent_config.model if agent_config and agent_config.model else None
 
@@ -501,6 +518,8 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             "is_plan_mode": is_plan_mode,
             "subagent_enabled": subagent_enabled,
             "tool_groups": agent_config.tool_groups if agent_config else None,
+            "effective_mcp_servers": effective_mcp_servers,
+            "allowed_tools": effective_allowed_tools,
             "available_skills": sorted(available_skills) if available_skills is not None else None,
         }
     )
@@ -537,7 +556,16 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             enabled=skill_search_enabled,
             container_base_path=container_base_path,
         )
-        raw_tools = get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled, app_config=resolved_app_config) + [setup_agent]
+        bootstrap_tool_kwargs = {
+            "model_name": model_name,
+            "subagent_enabled": subagent_enabled,
+            "app_config": resolved_app_config,
+        }
+        if effective_mcp_servers is not None:
+            bootstrap_tool_kwargs["mcp_servers"] = effective_mcp_servers
+        if effective_allowed_tools is not None:
+            bootstrap_tool_kwargs["allowed_tools"] = effective_allowed_tools
+        raw_tools = get_available_tools(**bootstrap_tool_kwargs) + [setup_agent]
         filtered = filter_tools_by_skill_allowed_tools(raw_tools, skills_for_tool_policy, always_allowed_tool_names=SKILL_LOADING_TOOL_NAMES)
         if non_interactive:
             filtered = [tool for tool in filtered if tool.name not in _NON_INTERACTIVE_DISABLED_TOOL_NAMES]
@@ -591,9 +619,26 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     # leave it unset, so ``update_agent`` remains available there.
     channel_name = cfg.get("channel_name")
     is_webhook_channel = channel_name in _WEBHOOK_CHANNELS
-    extra_tools = [update_agent] if agent_name and not is_webhook_channel else []
+    can_update_agent = (
+        effective_allowed_tools is None or "update_agent" in effective_allowed_tools
+    )
+    extra_tools = (
+        [update_agent]
+        if agent_name and not is_webhook_channel and can_update_agent
+        else []
+    )
     # Default lead agent (unchanged behavior)
-    raw_tools = get_available_tools(model_name=model_name, groups=agent_config.tool_groups if agent_config else None, subagent_enabled=subagent_enabled, app_config=resolved_app_config)
+    tool_kwargs = {
+        "model_name": model_name,
+        "groups": agent_config.tool_groups if agent_config else None,
+        "subagent_enabled": subagent_enabled,
+        "app_config": resolved_app_config,
+    }
+    if effective_mcp_servers is not None:
+        tool_kwargs["mcp_servers"] = effective_mcp_servers
+    if effective_allowed_tools is not None:
+        tool_kwargs["allowed_tools"] = effective_allowed_tools
+    raw_tools = get_available_tools(**tool_kwargs)
     filtered = filter_tools_by_skill_allowed_tools(raw_tools + extra_tools, skills_for_tool_policy, always_allowed_tool_names=SKILL_LOADING_TOOL_NAMES)
     if non_interactive:
         filtered = [tool for tool in filtered if tool.name not in _NON_INTERACTIVE_DISABLED_TOOL_NAMES]

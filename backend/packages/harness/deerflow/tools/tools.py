@@ -41,12 +41,40 @@ def _ensure_sync_invocable_tool(tool: BaseTool) -> BaseTool:
     return tool
 
 
+def filter_mcp_tools_by_server_names[ToolT](
+    tools: list[ToolT],
+    allowed_servers: list[str] | None,
+) -> list[ToolT]:
+    """Filter prefixed MCP tools to the selected server names."""
+    if allowed_servers is None:
+        return tools
+    prefixes = tuple(f"{server_name}_" for server_name in allowed_servers)
+    return [
+        tool
+        for tool in tools
+        if getattr(tool, "name", "").startswith(prefixes)
+    ]
+
+
+def filter_tools_by_allowed_names[ToolT](
+    tools: list[ToolT],
+    allowed_tools: list[str] | None,
+) -> list[ToolT]:
+    """Filter tools to an exact allowlist, preserving allow-all when omitted."""
+    if allowed_tools is None:
+        return tools
+    allowed = set(allowed_tools)
+    return [tool for tool in tools if getattr(tool, "name", "") in allowed]
+
+
 def get_available_tools(
     groups: list[str] | None = None,
     include_mcp: bool = True,
     model_name: str | None = None,
     subagent_enabled: bool = False,
     *,
+    mcp_servers: list[str] | None = None,
+    allowed_tools: list[str] | None = None,
     app_config: AppConfig | None = None,
 ) -> list[BaseTool]:
     """Get all available tools from config.
@@ -59,6 +87,8 @@ def get_available_tools(
         include_mcp: Whether to include tools from MCP servers (default: True).
         model_name: Optional model name to determine if vision tools should be included.
         subagent_enabled: Whether to include subagent tools (task, task_status).
+        mcp_servers: Optional enabled MCP server names to expose for this run.
+        allowed_tools: Optional exact tool-name allowlist for this run.
 
     Returns:
         List of available tools.
@@ -85,7 +115,10 @@ def get_available_tools(
                 cfg.use,
             )
 
-    loaded_tools = [_ensure_sync_invocable_tool(t) for _, t in loaded_tools_raw]
+    loaded_tools = filter_tools_by_allowed_names(
+        [_ensure_sync_invocable_tool(t) for _, t in loaded_tools_raw],
+        allowed_tools,
+    )
 
     # Conditionally add tools based on config
     builtin_tools = BUILTIN_TOOLS.copy()
@@ -109,6 +142,7 @@ def get_available_tools(
     if model_config is not None and model_config.supports_vision:
         builtin_tools.append(view_image_tool)
         logger.info(f"Including view_image_tool for model '{model_name}' (supports_vision=True)")
+    builtin_tools = filter_tools_by_allowed_names(builtin_tools, allowed_tools)
 
     # Get cached MCP tools if enabled
     # NOTE: We use ExtensionsConfig.from_file() instead of config.extensions
@@ -124,6 +158,8 @@ def get_available_tools(
             extensions_config = ExtensionsConfig.from_file()
             if extensions_config.get_enabled_mcp_servers():
                 mcp_tools = get_cached_mcp_tools()
+                mcp_tools = filter_mcp_tools_by_server_names(mcp_tools, mcp_servers)
+                mcp_tools = filter_tools_by_allowed_names(mcp_tools, allowed_tools)
                 if mcp_tools:
                     logger.info(f"Using {len(mcp_tools)} cached MCP tool(s)")
 
@@ -152,6 +188,7 @@ def get_available_tools(
             acp_agents = getattr(config, "acp_agents", {}) or {}
         if acp_agents:
             acp_tools.append(build_invoke_acp_agent_tool(acp_agents))
+            acp_tools = filter_tools_by_allowed_names(acp_tools, allowed_tools)
             logger.info(f"Including invoke_acp_agent tool ({len(acp_agents)} agent(s): {list(acp_agents.keys())})")
     except Exception as e:
         logger.warning(f"Failed to load ACP tool: {e}")

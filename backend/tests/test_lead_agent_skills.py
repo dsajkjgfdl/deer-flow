@@ -366,6 +366,69 @@ def test_make_lead_agent_enforces_allowed_tools_when_skill_cache_is_cold(monkeyp
     assert tool_names == ["read_file", "describe_skill"]
 
 
+def test_make_lead_agent_uses_effective_runtime_policy(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from deerflow.agents.lead_agent import agent as lead_agent_module
+
+    captured: dict[str, object] = {}
+
+    def fake_get_available_tools(**kwargs):
+        captured["tool_kwargs"] = kwargs
+        return [NamedTool("read_file"), NamedTool("bash")]
+
+    def fake_load_policy_skills(available_skills, *, app_config, user_id=None):
+        captured["available_skills"] = available_skills
+        return [_make_skill("effective-skill", ["read_file"])]
+
+    monkeypatch.setattr(lead_agent_module, "_resolve_model_name", lambda x=None, **kwargs: "default-model")
+    monkeypatch.setattr(lead_agent_module, "create_chat_model", lambda **kwargs: "model")
+    monkeypatch.setattr(lead_agent_module, "build_middlewares", lambda *args, **kwargs: [])
+    monkeypatch.setattr(lead_agent_module, "apply_prompt_template", lambda **kwargs: "mock_prompt")
+    monkeypatch.setattr(lead_agent_module, "create_agent", lambda **kwargs: kwargs)
+    monkeypatch.setattr(
+        lead_agent_module,
+        "load_agent_config",
+        lambda x: AgentConfig(
+            name="test",
+            skills=["legacy-skill"],
+            mcp_servers=["legacy-mcp"],
+            allowed_tools=["legacy_tool"],
+            tool_groups=["legacy-group"],
+        ),
+    )
+    monkeypatch.setattr(
+        lead_agent_module,
+        "_load_enabled_skills_for_tool_policy",
+        fake_load_policy_skills,
+    )
+    monkeypatch.setattr("deerflow.tools.get_available_tools", fake_get_available_tools)
+
+    mock_app_config = MagicMock()
+    mock_app_config.get_model_config.return_value = SimpleNamespace(
+        supports_thinking=False,
+        supports_vision=False,
+    )
+    monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: mock_app_config)
+
+    agent_kwargs = lead_agent_module.make_lead_agent(
+        {
+            "configurable": {
+                "agent_name": "test",
+                "effective_mcp_servers": ["text2cypher"],
+                "effective_skills": ["effective-skill"],
+                "effective_allowed_tools": ["read_file"],
+            }
+        }
+    )
+
+    assert captured["available_skills"] == {"effective-skill"}
+    assert captured["tool_kwargs"]["mcp_servers"] == ["text2cypher"]
+    assert captured["tool_kwargs"]["allowed_tools"] == ["read_file"]
+    tool_names = [tool.name for tool in agent_kwargs["tools"]]
+    assert tool_names == ["read_file", "describe_skill"]
+
+
 def test_make_lead_agent_fails_closed_when_skill_policy_load_fails(monkeypatch):
     from unittest.mock import MagicMock
 

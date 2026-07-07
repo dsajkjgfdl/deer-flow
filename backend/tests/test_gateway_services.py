@@ -439,6 +439,33 @@ def test_non_interactive_context_override_honored_for_internal_caller():
     assert config["configurable"]["model_name"] == "gpt"
 
 
+def test_merge_run_context_overrides_propagates_effective_agent_policy():
+    """Platform assignment resolution stamps the effective agent policy onto
+    ``body.context``. The gateway must forward all of it into runtime config so
+    ``make_lead_agent`` consumes the selected MCP, skill and tool allowlists.
+    """
+    from app.gateway.services import build_run_config, merge_run_context_overrides
+
+    config = build_run_config("thread-1", None, None)
+    merge_run_context_overrides(
+        config,
+        {
+            "agent_name": "hr-boss-agent",
+            "effective_mcp_servers": ["text2cypher"],
+            "effective_skills": ["hr-boss"],
+            "effective_allowed_tools": ["text2cypher_answer_question"],
+        },
+    )
+
+    for section in ("context", "configurable"):
+        assert config[section]["agent_name"] == "hr-boss-agent"
+        assert config[section]["effective_mcp_servers"] == ["text2cypher"]
+        assert config[section]["effective_skills"] == ["hr-boss"]
+        assert config[section]["effective_allowed_tools"] == [
+            "text2cypher_answer_question"
+        ]
+
+
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
@@ -800,6 +827,90 @@ async def _capture_start_run_graph_input(body):
         await record.task
 
     return captured["graph_input"]
+
+
+async def _capture_start_run_config(body, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.store.memory import InMemoryStore
+
+    from app.gateway import services as gateway_services
+    from app.gateway.services import start_run
+    from deerflow.persistence.thread_meta.memory import MemoryThreadMetaStore
+    from deerflow.runtime import RunManager
+    from deerflow.runtime.runs.store.memory import MemoryRunStore
+
+    run_manager = RunManager(store=MemoryRunStore())
+    state = SimpleNamespace(
+        stream_bridge=SimpleNamespace(),
+        run_manager=run_manager,
+        checkpointer=InMemorySaver(),
+        store=InMemoryStore(),
+        run_event_store=SimpleNamespace(),
+        run_events_config=None,
+        thread_store=MemoryThreadMetaStore(InMemoryStore()),
+    )
+    request = SimpleNamespace(
+        headers={},
+        state=SimpleNamespace(),
+        app=SimpleNamespace(state=state),
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_apply_effective_runtime(run_body, request):
+        run_body.context = {
+            "agent_name": "assigned-agent",
+            "effective_mcp_servers": ["assigned-mcp"],
+            "effective_skills": ["assigned-skill"],
+            "effective_allowed_tools": ["assigned_tool"],
+        }
+        run_body.metadata = {"agent_name": "assigned-agent"}
+
+    async def fake_run_agent(*args, **kwargs):
+        captured["config"] = kwargs["config"]
+
+    monkeypatch.setattr(
+        gateway_services,
+        "resolve_and_apply_effective_runtime",
+        fake_apply_effective_runtime,
+        raising=False,
+    )
+
+    with (
+        patch("app.gateway.services.resolve_agent_factory", return_value=object()),
+        patch("app.gateway.services.run_agent", side_effect=fake_run_agent),
+    ):
+        record = await start_run(body, "thread-runtime-assignment", request)
+        await record.task
+
+    return captured["config"]
+
+
+def test_start_run_applies_effective_runtime_before_building_config(
+    _stub_app_config,
+    monkeypatch,
+):
+    import asyncio
+
+    from app.gateway.routers.thread_runs import RunCreateRequest
+
+    config = asyncio.run(
+        _capture_start_run_config(
+            RunCreateRequest(
+                input={"messages": [{"role": "human", "content": "hi"}]},
+                context=None,
+            ),
+            monkeypatch,
+        )
+    )
+
+    assert config["context"]["agent_name"] == "assigned-agent"
+    assert config["configurable"]["agent_name"] == "assigned-agent"
+    assert config["context"]["effective_mcp_servers"] == ["assigned-mcp"]
+    assert config["context"]["effective_skills"] == ["assigned-skill"]
+    assert config["context"]["effective_allowed_tools"] == ["assigned_tool"]
 
 
 def test_start_run_translates_resume_command_to_langgraph_command(_stub_app_config):
