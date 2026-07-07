@@ -109,7 +109,7 @@ $env:PYTHONPATH=".;packages/harness"
 
 | Area | Status | Paths | Migration Notes |
 | --- | --- | --- | --- |
-| Landing/nav changes | Review | `frontend/src/app/page.tsx`, `frontend/src/app/landing/*`, `frontend/src/components/landing/*` | 上游新版移动端和可访问性修复很多，先判断是否仍要去导航页。 |
+| Landing/nav changes | Keep | `frontend/src/app/page.tsx`, `frontend/tests/unit/app/root-page.test.ts` | 二开版本固定不要官方导航页，`/` 必须直接跳转到 `/workspace/chats/new`；后续同步上游时保留该回归测试。 |
 | Agent cards/display names | Keep | `frontend/src/components/workspace/agents/agent-card.tsx`, `frontend/src/core/agents/*` | 与 HR Boss 展示有关，需适配新版 agent API。 |
 | Message list changes | Review | `frontend/src/components/workspace/messages/*`, `frontend/src/core/messages/*` | 上游新增 sidecar、workspace changes、引用等能力，禁止整文件覆盖。 |
 | Thread hooks | Review | `frontend/src/core/threads/*` | 与分支会话、workspace changes、反馈历史等上游新增功能冲突概率高。 |
@@ -161,4 +161,3 @@ Exit criteria:
 - Platform-related backend tests pass.
 - HR Boss and Huoju regression tests still pass.
 - No broad overwrite of gateway/runtime/frontend files.
-
