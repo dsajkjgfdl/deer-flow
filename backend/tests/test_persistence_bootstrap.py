@@ -47,7 +47,7 @@ from deerflow.persistence.migrations._helpers import _normalize_default
 asyncio_test = pytest.mark.asyncio
 
 
-HEAD = "0004_agent_platform_mvp"
+HEAD = "0005_tool_audit_content"
 BASELINE = "0001_baseline"
 
 
@@ -615,7 +615,7 @@ class TestDecideState:
 # ---------------------------------------------------------------------------
 
 
-def test_head_revision_is_token_usage_revision() -> None:
+def test_head_revision_is_current_revision() -> None:
     assert _get_head_revision() == HEAD
 
 

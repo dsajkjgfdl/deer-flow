@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class RunEventsConfig(BaseModel):
@@ -31,3 +31,21 @@ class RunEventsConfig(BaseModel):
         default=True,
         description="Whether RunJournal should accumulate token counts to RunRow.",
     )
+    capture_llm_requests: Literal["off", "summary", "full"] = Field(
+        default="off",
+        description="Whether RunJournal should record chat model request prompts: off, summary previews, or full serialized messages.",
+    )
+    max_llm_request_content: int = Field(
+        default=200_000,
+        ge=1,
+        description="Maximum serialized llm.chat.request payload size in bytes before RunJournal stores a preview instead.",
+    )
+
+    @field_validator("capture_llm_requests", mode="before")
+    @classmethod
+    def _normalize_capture_llm_requests(cls, value):
+        # YAML 1.1 parsers treat bare `off` as False. Accept that spelling as
+        # the documented disabled mode instead of forcing every config to quote it.
+        if value is False:
+            return "off"
+        return value

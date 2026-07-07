@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import stat
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -309,7 +310,8 @@ async def test_session_pool_tool_pins_cwd_and_temp_env(tmp_path):
     assert session_connection["env"]["TMP"] == str(tmp_dir)
     assert session_connection["env"]["TEMP"] == str(tmp_dir)
     assert tmp_dir.is_dir()
-    assert stat.S_IMODE(tmp_dir.stat().st_mode) == 0o700
+    if os.name != "nt":
+        assert stat.S_IMODE(tmp_dir.stat().st_mode) == 0o700
 
 
 @pytest.mark.asyncio
@@ -354,7 +356,7 @@ async def test_session_pool_tool_does_not_override_explicit_tmpdir(tmp_path):
     session_connection = create_session.call_args.args[0]
     # Operator-provided TMPDIR is preserved; TMP/TEMP still get our default.
     assert session_connection["env"]["TMPDIR"] == "/operator/tmp"
-    assert session_connection["env"]["TMP"].endswith(_MCP_TMP_SUBDIR)
+    assert session_connection["env"]["TMP"].replace("\\", "/").endswith(_MCP_TMP_SUBDIR)
 
 
 @pytest.mark.asyncio
@@ -833,13 +835,13 @@ def test_session_pool_tool_sync_wrapper_path_is_safe():
 
 
 # ---------------------------------------------------------------------------
-# get_mcp_tools: HTTP transport should NOT be pooled
+# get_mcp_tools: HTTP transport should be audited but NOT pooled
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_http_transport_tools_not_pooled():
-    """HTTP/SSE transport tools should NOT be wrapped with the session pool."""
+    """HTTP/SSE transport tools should be wrapped for audit without using the session pool."""
     from langchain_core.tools import StructuredTool
     from pydantic import BaseModel, Field
 
@@ -874,6 +876,10 @@ async def test_http_transport_tools_not_pooled():
         "myserver": MagicMock(type="http", url="http://localhost:8000/mcp", headers=None, command=None, args=[], env=None),
         "playwright": MagicMock(type="stdio", command="npx", args=["-y", "@anthropic/mcp-server-playwright"], env=None, url=None, headers=None),
     }
+    extensions_config.mcp_servers = {
+        "myserver": MagicMock(tool_call_timeout=None),
+        "playwright": MagicMock(tool_call_timeout=None),
+    }
     extensions_config.model_extra = {}
 
     servers_config = {
@@ -906,10 +912,11 @@ async def test_http_transport_tools_not_pooled():
     # Tool discovery is lazy: no pooled sessions are created until a wrapped tool is invoked.
     assert list(pool._entries.keys()) == []
 
-    # Verify the HTTP tool was NOT wrapped with the pool (it's the original tool).
+    # Verify the HTTP tool is wrapped for audit, but discovery still does not
+    # create a pooled HTTP session.
     http_tools = [t for t in tools if t.name == "myserver_search"]
     assert len(http_tools) == 1
-    assert http_tools[0].coroutine is http_tool.coroutine
+    assert http_tools[0].coroutine is not http_tool.coroutine
 
     # Verify the stdio tool WAS wrapped with the pool.
     stdio_tools = [t for t in tools if t.name == "playwright_navigate"]
@@ -964,7 +971,8 @@ async def test_non_stdio_tool_call_timeout_warns_that_it_is_ignored(caplog):
 
         tools = await get_mcp_tools()
 
-    assert tools == [http_tool]
+    assert [tool.name for tool in tools] == [http_tool.name]
+    assert tools[0].coroutine is not http_tool.coroutine
     assert any(record.levelno == logging.WARNING and "remote" in record.getMessage() and "tool_call_timeout" in record.getMessage() and "stdio" in record.getMessage() for record in caplog.records)
 
 

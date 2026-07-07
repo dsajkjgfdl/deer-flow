@@ -15,8 +15,14 @@ logger = logging.getLogger(__name__)
 
 # Shared thread pool for sync tool invocation in async environments.
 _SYNC_TOOL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=10, thread_name_prefix="tool-sync")
+_SYNC_TOOL_ONE_SHOT_LOOP: contextvars.ContextVar[bool] = contextvars.ContextVar("sync_tool_one_shot_loop", default=False)
 
 atexit.register(lambda: _SYNC_TOOL_EXECUTOR.shutdown(wait=False))
+
+
+def in_sync_tool_one_shot_loop() -> bool:
+    """Return True while a sync tool wrapper is running its temporary event loop."""
+    return _SYNC_TOOL_ONE_SHOT_LOOP.get()
 
 
 def _get_runnable_config_param(func: Callable[..., Any]) -> str | None:
@@ -62,6 +68,13 @@ def make_sync_tool_wrapper(coro: Callable[..., Any], tool_name: str) -> Callable
     config_param = _get_runnable_config_param(coro)
 
     def run_coroutine(*args: Any, **kwargs: Any) -> Any:
+        async def run_with_one_shot_marker() -> Any:
+            token = _SYNC_TOOL_ONE_SHOT_LOOP.set(True)
+            try:
+                return await coro(*args, **kwargs)
+            finally:
+                _SYNC_TOOL_ONE_SHOT_LOOP.reset(token)
+
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -70,9 +83,9 @@ def make_sync_tool_wrapper(coro: Callable[..., Any], tool_name: str) -> Callable
         try:
             if loop is not None and loop.is_running():
                 context = contextvars.copy_context()
-                future = _SYNC_TOOL_EXECUTOR.submit(context.run, lambda: asyncio.run(coro(*args, **kwargs)))
+                future = _SYNC_TOOL_EXECUTOR.submit(context.run, lambda: asyncio.run(run_with_one_shot_marker()))
                 return future.result()
-            return asyncio.run(coro(*args, **kwargs))
+            return asyncio.run(run_with_one_shot_marker())
         except Exception as e:
             logger.error("Error invoking tool %r via sync wrapper: %s", tool_name, e, exc_info=True)
             raise

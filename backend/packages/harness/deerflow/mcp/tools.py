@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
+import time
+import uuid
 from collections.abc import Iterable, Mapping
 from datetime import timedelta
 from pathlib import Path
@@ -19,12 +22,30 @@ from deerflow.config.paths import VIRTUAL_PATH_PREFIX, Paths, get_paths
 from deerflow.mcp.client import build_servers_config
 from deerflow.mcp.oauth import build_oauth_tool_interceptor, get_initial_oauth_headers
 from deerflow.mcp.session_pool import get_session_pool
+from deerflow.persistence.engine import get_session_factory
+from deerflow.persistence.platform import PlatformRepository
 from deerflow.reflection import resolve_variable
 from deerflow.runtime.user_context import resolve_runtime_user_id
-from deerflow.tools.sync import make_sync_tool_wrapper
+from deerflow.tools.sync import in_sync_tool_one_shot_loop, make_sync_tool_wrapper
 from deerflow.tools.types import Runtime
 
 logger = logging.getLogger(__name__)
+_MAX_AUDIT_ERROR_LENGTH = 500
+_MAX_AUDIT_STRING_LENGTH = 4000
+_MAX_AUDIT_ANSWER_PREVIEW_LENGTH = 1000
+_MAX_AUDIT_COLLECTION_ITEMS = 50
+_MAX_AUDIT_DEPTH = 8
+_AUDIT_REDACTED = "[REDACTED]"
+_SENSITIVE_AUDIT_KEY_PARTS = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "cookie",
+    "credential",
+    "password",
+    "secret",
+    "token",
+)
 
 # Subdirectory under the thread's workspace used as the temp dir for stdio MCP
 # subprocesses. Pinning the process temp dir here (alongside its cwd) makes
@@ -289,22 +310,287 @@ def _rewrite_local_paths_in_text(
     )
 
 
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _runtime_context(runtime: Runtime | None) -> Mapping[str, Any]:
+    context = getattr(runtime, "context", None)
+    return _as_mapping(context)
+
+
+def _runtime_config(runtime: Runtime | None) -> Mapping[str, Any]:
+    return _as_mapping(getattr(runtime, "config", None))
+
+
+def _config_context(config: Mapping[str, Any]) -> Mapping[str, Any]:
+    return _as_mapping(config.get("context"))
+
+
+def _config_configurable(config: Mapping[str, Any]) -> Mapping[str, Any]:
+    return _as_mapping(config.get("configurable"))
+
+
+def _current_langgraph_config() -> Mapping[str, Any]:
+    try:
+        return _as_mapping(get_config())
+    except RuntimeError:
+        return {}
+
+
+def _runtime_value(runtime: Runtime | None, key: str) -> Any:
+    runtime_config = _runtime_config(runtime)
+    current_config = _current_langgraph_config()
+
+    for source in (
+        _runtime_context(runtime),
+        _config_context(runtime_config),
+        _config_configurable(runtime_config),
+        _config_context(current_config),
+        _config_configurable(current_config),
+    ):
+        if key in source:
+            return source[key]
+    return None
+
+
 def _extract_thread_id(runtime: Runtime | None) -> str:
     """Extract thread_id from the injected tool runtime or LangGraph config."""
-    if runtime is not None:
-        tid = runtime.context.get("thread_id") if runtime.context else None
-        if tid is not None:
-            return str(tid)
-        config = runtime.config or {}
-        tid = config.get("configurable", {}).get("thread_id")
-        if tid is not None:
-            return str(tid)
+    tid = _runtime_value(runtime, "thread_id")
+    return str(tid) if tid is not None else "default"
+
+
+def _truncate_audit_error(error: str | None) -> str | None:
+    if error is None:
+        return None
+    return error[:_MAX_AUDIT_ERROR_LENGTH]
+
+
+def _is_sensitive_audit_key(key: Any) -> bool:
+    normalized = str(key).lower().replace("-", "_")
+    return any(part in normalized for part in _SENSITIVE_AUDIT_KEY_PARTS)
+
+
+def _sanitize_audit_value(value: Any, *, key: Any = None, depth: int = 0) -> Any:
+    if key is not None and _is_sensitive_audit_key(key):
+        return _AUDIT_REDACTED
+    if depth >= _MAX_AUDIT_DEPTH:
+        return "[MAX_DEPTH]"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value[:_MAX_AUDIT_STRING_LENGTH]
+    if isinstance(value, Mapping):
+        items = list(value.items())
+        sanitized = {
+            str(item_key): _sanitize_audit_value(item_value, key=item_key, depth=depth + 1)
+            for item_key, item_value in items[:_MAX_AUDIT_COLLECTION_ITEMS]
+        }
+        if len(items) > _MAX_AUDIT_COLLECTION_ITEMS:
+            sanitized["_truncated_keys"] = len(items) - _MAX_AUDIT_COLLECTION_ITEMS
+        return sanitized
+    if isinstance(value, (list, tuple, set, frozenset)):
+        items = list(value)
+        sanitized = [_sanitize_audit_value(item, depth=depth + 1) for item in items[:_MAX_AUDIT_COLLECTION_ITEMS]]
+        if len(items) > _MAX_AUDIT_COLLECTION_ITEMS:
+            sanitized.append({"_truncated_items": len(items) - _MAX_AUDIT_COLLECTION_ITEMS})
+        return sanitized
+    return str(value)[:_MAX_AUDIT_STRING_LENGTH]
+
+
+def _extract_converted_payload(converted_result: Any) -> dict[str, Any] | None:
+    if not isinstance(converted_result, tuple) or len(converted_result) != 2:
+        return None
+
+    content, artifact = converted_result
+    if isinstance(artifact, Mapping):
+        structured_content = artifact.get("structured_content")
+        if isinstance(structured_content, Mapping):
+            return dict(structured_content)
+
+    if not isinstance(content, list):
+        return None
+    for block in content:
+        text = block.get("text") if isinstance(block, Mapping) else getattr(block, "text", None)
+        if not isinstance(text, str):
+            continue
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _text2cypher_public_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    public_keys = (
+        "status",
+        "answerable",
+        "should_retry",
+        "limitation",
+        "failure_code",
+        "failure_stage",
+        "failure_detail",
+        "result_type",
+        "repaired",
+        "quality_repaired",
+        "quality_issue",
+        "term_resolution",
+        "term_resolution_error",
+        "scope",
+        "risk_level",
+        "assumptions",
+        "selected_values",
+        "timing",
+    )
+    public = {key: payload[key] for key in public_keys if key in payload}
+    execution = payload.get("execution")
+    if isinstance(execution, Mapping):
+        execution_keys = ("columns", "records", "truncated", "quality_issue")
+        public["execution"] = {key: execution[key] for key in execution_keys if key in execution}
+    return public
+
+
+def _without_debug_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in payload.items() if key != "debug"}
+
+
+def _text2cypher_trace(payload: Mapping[str, Any]) -> dict[str, Any]:
+    trace: dict[str, Any] = {}
+    generation = payload.get("generation")
+    if isinstance(generation, Mapping):
+        generation_keys = ("question", "evidence", "generated_cypher", "profile_path", "profile_digest")
+        trace["generation"] = {key: generation[key] for key in generation_keys if key in generation}
+
+    validation = payload.get("validation")
+    if isinstance(validation, Mapping):
+        validation_keys = ("valid", "normalized_cypher", "error", "diagnostics")
+        trace["validation"] = {key: validation[key] for key in validation_keys if key in validation}
+
+    execution = payload.get("execution")
+    if isinstance(execution, Mapping):
+        records = execution.get("records")
+        execution_trace = {
+            key: execution[key]
+            for key in ("normalized_cypher", "columns", "truncated", "quality_issue")
+            if key in execution
+        }
+        if isinstance(records, list):
+            execution_trace["row_count"] = len(records)
+            execution_trace["records_preview"] = records[:10]
+        trace["execution"] = execution_trace
+
+    for key in ("repaired", "quality_repaired", "quality_issue", "term_resolution"):
+        if key in payload:
+            trace[key] = payload[key]
+    return trace
+
+
+def _build_tool_audit_content(
+    server_name: str,
+    original_name: str,
+    arguments: Mapping[str, Any],
+    converted_result: Any,
+) -> dict[str, Any]:
+    content: dict[str, Any] = {
+        "request": {"arguments": _sanitize_audit_value(arguments)},
+    }
+    payload = _extract_converted_payload(converted_result)
+    if payload is None:
+        content["result"] = _sanitize_audit_value(converted_result)
+        return content
+
+    if server_name == "text2cypher" and original_name == "answer_question":
+        content["trace"] = _sanitize_audit_value(_text2cypher_trace(payload))
+        content["result"] = _sanitize_audit_value(_text2cypher_public_payload(payload))
+        return content
+
+    if server_name == "text2cypher" and original_name == "query_employees":
+        content["trace"] = _sanitize_audit_value(payload.get("debug", {}))
+        content["result"] = _sanitize_audit_value(_without_debug_payload(payload))
+        return content
+
+    if server_name == "hr-graphrag-qa":
+        content["trace"] = _sanitize_audit_value(
+            {key: payload[key] for key in ("strategy", "evidence_status", "confidence") if key in payload}
+        )
+        result: dict[str, Any] = {}
+        answer = payload.get("answer")
+        if isinstance(answer, str):
+            result["answer_preview"] = answer[:_MAX_AUDIT_ANSWER_PREVIEW_LENGTH]
+        if "context_counts" in payload:
+            result["context_counts"] = payload["context_counts"]
+        for key in ("status", "notes", "limitations"):
+            if key in payload:
+                result[key] = payload[key]
+        content["result"] = _sanitize_audit_value(result)
+        return content
+
+    content["result"] = _sanitize_audit_value(payload)
+    return content
+
+
+def _replace_converted_payload(converted_result: Any, payload: dict[str, Any]) -> Any:
+    if not isinstance(converted_result, tuple) or len(converted_result) != 2:
+        return converted_result
+    return (
+        [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
+        {"structured_content": payload},
+    )
+
+
+def _sanitize_converted_result_for_agent(server_name: str, original_name: str, converted_result: Any) -> Any:
+    if server_name != "text2cypher" or original_name not in {"answer_question", "query_employees"}:
+        return converted_result
+    payload = _extract_converted_payload(converted_result)
+    if payload is None:
+        return converted_result
+    if original_name == "answer_question":
+        if "generation" not in payload and "validation" not in payload:
+            return converted_result
+        public_payload = _text2cypher_public_payload(payload)
+    else:
+        if "debug" not in payload:
+            return converted_result
+        public_payload = _without_debug_payload(payload)
+    return _replace_converted_payload(converted_result, public_payload)
+
+
+async def write_tool_audit_from_runtime(
+    runtime: Runtime | None,
+    *,
+    tool_name: str,
+    mcp_server_name: str | None,
+    status: str,
+    latency_ms: int | None,
+    error: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    content: dict[str, Any] | None = None,
+) -> None:
+    """Best-effort tool audit write from LangGraph runtime context."""
+
+    session_factory = get_session_factory()
+    if session_factory is None:
+        return
 
     try:
-        tid = get_config().get("configurable", {}).get("thread_id")
-        return str(tid) if tid is not None else "default"
-    except RuntimeError:
-        return "default"
+        repo = PlatformRepository(session_factory)
+        await repo.write_tool_audit(
+            tool_name=tool_name,
+            status=status,
+            run_id=_runtime_value(runtime, "run_id"),
+            thread_id=_runtime_value(runtime, "thread_id"),
+            user_id=_runtime_value(runtime, "user_id"),
+            agent_name=_runtime_value(runtime, "agent_name"),
+            mcp_server_name=mcp_server_name,
+            latency_ms=latency_ms,
+            error=_truncate_audit_error(error),
+            metadata=metadata or {},
+            content=_sanitize_audit_value(content or {}),
+        )
+    except Exception:
+        logger.warning("Failed to write tool audit for %s", tool_name, exc_info=True)
 
 
 def _convert_call_tool_result(
@@ -478,7 +764,6 @@ def _make_session_pool_tool(
             session_env.setdefault("TMP", str(tmp_dir))
             session_env.setdefault("TEMP", str(tmp_dir))
             session_connection["env"] = session_env
-        session = await pool.get_session(server_name, scope_key, session_connection)
 
         # Build common call_tool kwargs once — only add keys when needed so
         # existing call-sites that assert on exact arguments are not affected.
@@ -486,63 +771,116 @@ def _make_session_pool_tool(
         if tool_call_timeout:
             call_kwargs["read_timeout_seconds"] = timedelta(seconds=tool_call_timeout)
 
-        if tool_interceptors:
-            from langchain_mcp_adapters.interceptors import MCPToolCallRequest
+        mcp_arguments = dict(arguments)
+        if server_name == "text2cypher" and original_name in {"answer_question", "query_employees"}:
+            mcp_arguments["include_debug"] = True
 
-            async def base_handler(request: MCPToolCallRequest) -> Any:
-                # Preserve interceptor-injected headers for stdio MCP calls by
-                # forwarding them through MCP call meta.
-                kwargs = dict(call_kwargs)
-                if request.headers:
-                    if isinstance(request.headers, Mapping):
-                        kwargs["meta"] = {"headers": dict(request.headers)}
-                    else:
-                        logger.warning("Ignoring MCP interceptor headers with unsupported type: %s", type(request.headers).__name__)
-                return await session.call_tool(
-                    request.name,
-                    request.args,
-                    **kwargs,
+        async def call_with_session(session: Any) -> Any:
+            if tool_interceptors:
+                from langchain_mcp_adapters.interceptors import MCPToolCallRequest
+
+                async def base_handler(request: MCPToolCallRequest) -> Any:
+                    # Preserve interceptor-injected headers for stdio MCP calls by
+                    # forwarding them through MCP call meta.
+                    kwargs = dict(call_kwargs)
+                    if request.headers:
+                        if isinstance(request.headers, Mapping):
+                            kwargs["meta"] = {"headers": dict(request.headers)}
+                        else:
+                            logger.warning("Ignoring MCP interceptor headers with unsupported type: %s", type(request.headers).__name__)
+                    return await session.call_tool(
+                        request.name,
+                        request.args,
+                        **kwargs,
+                    )
+
+                handler = base_handler
+                for interceptor in reversed(tool_interceptors):
+                    outer = handler
+
+                    async def wrapped(req: Any, _i: Any = interceptor, _h: Any = outer) -> Any:
+                        return await _i(req, _h)
+
+                    handler = wrapped
+
+                request = MCPToolCallRequest(
+                    name=original_name,
+                    args=mcp_arguments,
+                    server_name=server_name,
+                    runtime=runtime,
                 )
+                return await handler(request)
 
-            handler = base_handler
-            for interceptor in reversed(tool_interceptors):
-                outer = handler
-
-                async def wrapped(req: Any, _i: Any = interceptor, _h: Any = outer) -> Any:
-                    return await _i(req, _h)
-
-                handler = wrapped
-
-            request = MCPToolCallRequest(
-                name=original_name,
-                args=arguments,
-                server_name=server_name,
-                runtime=runtime,
-            )
-            call_tool_result = await handler(request)
-        else:
-            call_tool_result = await session.call_tool(
+            return await session.call_tool(
                 original_name,
-                arguments,
+                mcp_arguments,
                 **call_kwargs,
             )
 
-        # The after-call snapshot diff only feeds bare-filename correlation in
-        # free text, so skip the second recursive walk when there is no text
-        # content to rewrite. Both the diff and the per-token path resolution
-        # inside _convert_call_tool_result touch the filesystem, so run them off
-        # the event loop.
-        changed_files: list[Path] | None = None
-        if is_stdio and before_files is not None and _result_has_text_content(call_tool_result):
-            changed_files = await asyncio.to_thread(_changed_workspace_files, source_base_dir, before_files)
-        return await asyncio.to_thread(
-            _convert_call_tool_result,
-            call_tool_result,
-            thread_id=thread_id,
-            user_id=user_id,
-            source_base_dir=process_cwd,
-            changed_files=changed_files,
-        )
+        start = time.perf_counter()
+        status = "success"
+        error: str | None = None
+        tool_call_id = uuid.uuid4().hex
+        audit_content = {
+            "request": {"arguments": _sanitize_audit_value(arguments)},
+        }
+        use_pooled_session = is_stdio and not in_sync_tool_one_shot_loop()
+
+        try:
+            if use_pooled_session:
+                session = await pool.get_session(server_name, scope_key, session_connection)
+                try:
+                    call_tool_result = await call_with_session(session)
+                except Exception:
+                    await pool.invalidate(server_name, scope_key)
+                    raise
+                if getattr(call_tool_result, "isError", False):
+                    await pool.invalidate(server_name, scope_key)
+            else:
+                from langchain_mcp_adapters.sessions import create_session
+
+                async with create_session(session_connection) as session:
+                    await session.initialize()
+                    call_tool_result = await call_with_session(session)
+
+            # The after-call snapshot diff only feeds bare-filename correlation in
+            # free text, so skip the second recursive walk when there is no text
+            # content to rewrite. Both the diff and the per-token path resolution
+            # inside _convert_call_tool_result touch the filesystem, so run them off
+            # the event loop.
+            changed_files: list[Path] | None = None
+            if is_stdio and before_files is not None and _result_has_text_content(call_tool_result):
+                changed_files = await asyncio.to_thread(_changed_workspace_files, source_base_dir, before_files)
+            converted_result = await asyncio.to_thread(
+                _convert_call_tool_result,
+                call_tool_result,
+                thread_id=thread_id,
+                user_id=user_id,
+                source_base_dir=process_cwd,
+                changed_files=changed_files,
+            )
+            audit_content = _build_tool_audit_content(server_name, original_name, arguments, converted_result)
+            return _sanitize_converted_result_for_agent(server_name, original_name, converted_result)
+        except Exception as exc:
+            status = "error"
+            error = str(exc)
+            raise
+        finally:
+            latency_ms = max(0, int((time.perf_counter() - start) * 1000))
+            await write_tool_audit_from_runtime(
+                runtime,
+                tool_name=tool.name,
+                mcp_server_name=server_name,
+                status=status,
+                latency_ms=latency_ms,
+                error=error,
+                metadata={
+                    "argument_keys": sorted(str(key) for key in arguments),
+                    "tool_call_id": tool_call_id,
+                    "session_mode": "pooled" if use_pooled_session else "one_shot",
+                },
+                content=audit_content,
+            )
 
     return StructuredTool(
         name=tool.name,
@@ -557,10 +895,9 @@ def _make_session_pool_tool(
 async def get_mcp_tools() -> list[BaseTool]:
     """Get all tools from enabled MCP servers.
 
-    Tools using stdio transport are wrapped with persistent-session logic so
-    consecutive calls within the same thread reuse the same MCP session.
-    HTTP/SSE tools are returned unwrapped to avoid cross-task TaskGroup
-    cleanup errors.
+    Tools are wrapped for audit and hidden Text2Cypher debug capture. Stdio
+    transports additionally reuse pooled sessions, while HTTP/SSE calls use
+    one-shot sessions to avoid cross-task TaskGroup cleanup errors.
 
     Returns:
         List of LangChain tools from all enabled MCP servers.
@@ -647,10 +984,10 @@ async def get_mcp_tools() -> list[BaseTool]:
         tools = [tool for server_tools in tools_by_server for tool in server_tools]
         logger.info(f"Successfully loaded {len(tools)} tool(s) from MCP servers")
 
-        # Wrap each tool with persistent-session logic.
-        # Only pool stdio sessions. HTTP/SSE transports use anyio TaskGroups
-        # internally which cannot be closed from a different async task, so
-        # pooling them causes RuntimeError on cleanup (see #3203).
+        # Wrap each prefixed tool for audit. Only stdio sessions are pooled.
+        # HTTP/SSE transports use anyio TaskGroups internally which cannot be
+        # closed from a different async task, so the wrapper uses one-shot
+        # sessions for them instead of the shared pool.
         wrapped_tools: list[BaseTool] = []
         # Route each tool by the server that actually produced it: tools_by_server[i]
         # corresponds to the i-th server in servers_config. Inferring the source server by
@@ -663,16 +1000,16 @@ async def get_mcp_tools() -> list[BaseTool]:
             transport = servers_config[source_name].get("transport", "stdio")
             server_cfg = extensions_config.mcp_servers.get(source_name)
             for tool in server_tools:
-                if tool.name.startswith(f"{source_name}_") and transport == "stdio":
-                    _timeout = server_cfg.tool_call_timeout if server_cfg else None
-                    wrapped_tools.append(_make_session_pool_tool(tool, source_name, servers_config[source_name], tool_interceptors, tool_call_timeout=_timeout))
-                else:
+                if tool.name.startswith(f"{source_name}_"):
                     if transport != "stdio" and server_cfg and server_cfg.tool_call_timeout is not None:
                         logger.warning(
                             "Ignoring tool_call_timeout for MCP server '%s' because transport '%s' is not stdio; configure HTTP/SSE transport-level timeouts instead.",
                             source_name,
                             transport,
                         )
+                    _timeout = server_cfg.tool_call_timeout if transport == "stdio" and server_cfg else None
+                    wrapped_tools.append(_make_session_pool_tool(tool, source_name, servers_config[source_name], tool_interceptors, tool_call_timeout=_timeout))
+                else:
                     wrapped_tools.append(tool)
 
         # Patch tools to support sync invocation, as deerflow client streams synchronously

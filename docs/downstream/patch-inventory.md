@@ -76,7 +76,7 @@ $env:PYTHONPATH=".;packages/harness"
 | Tool concurrency limit | Keep | `backend/packages/harness/deerflow/agents/middlewares/tool_concurrency_limit_middleware.py` | 优先做成通用 middleware，不写 HR 特例。 |
 | Tool error handling | Keep | `backend/packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py` | 与上游错误处理合并，不能覆盖新状态码和新子代理结果格式。 |
 | MCP lifecycle fixes | Review | `backend/packages/harness/deerflow/mcp/session_pool.py`, `mcp/tools.py`, `mcp/cache.py` | 上游已修 HTTP/SSE session pooling，迁移前逐行比对。 |
-| Tool audit content | Review | `backend/packages/harness/deerflow/persistence/migrations/versions/20260615_tool_audit_content.py` | 与平台监控一起迁移。 |
+| Tool audit content | Keep | `backend/packages/harness/deerflow/persistence/migrations/versions/0005_tool_audit_content.py`, `backend/packages/harness/deerflow/mcp/tools.py`, `backend/tests/test_tool_audit.py` | 已迁移：MCP tool 调用审计内容、Text2Cypher debug 入审计不入 agent 返回、HTTP MCP one-shot 审计 wrapper。 |
 
 Recommended verification:
 
@@ -95,7 +95,7 @@ $env:PYTHONPATH=".;packages/harness"
 | Gateway services | Review | `backend/app/gateway/services.py` | 上游新增 wait disconnect、workspace changes、scheduled tasks 等逻辑，不能用旧文件覆盖。 |
 | Thread runs router | Review | `backend/app/gateway/routers/thread_runs.py` | 先确认本地改动是否仍有必要。 |
 | Agent factory/runtime resolver | Keep | `backend/app/gateway/services.py`, `backend/packages/harness/deerflow/agents/runtime_resolver.py`, `backend/packages/harness/deerflow/agents/lead_agent/agent.py`, `backend/packages/harness/deerflow/tools/tools.py`, `backend/tests/test_agent_runtime_resolver.py`, `backend/tests/test_tools_runtime_policy.py` | 运行时 agent 分配生效链路已迁移：平台分配解析有效 agent，并把 MCP/技能/工具白名单写入运行配置供 lead agent 消费。 |
-| Run journal/tool audit | Review | `backend/packages/harness/deerflow/runtime/journal.py`, `runtime/runs/*` | 与平台监控需求绑定迁移。 |
+| Run journal/tool audit | Keep | `backend/packages/harness/deerflow/runtime/journal.py`, `backend/packages/harness/deerflow/runtime/runs/worker.py`, `backend/tests/test_run_journal_llm_requests.py` | 已迁移：RunJournal 支持可配置 LLM request 捕获、tool start/error trace，worker 透传 run_events 配置。 |
 
 Recommended verification:
 

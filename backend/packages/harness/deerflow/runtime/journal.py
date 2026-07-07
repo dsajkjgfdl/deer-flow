@@ -18,6 +18,7 @@ Key design decisions:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -37,6 +38,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _LEGACY_SUMMARY_MESSAGE_NAME = "summary"
+_LLM_REQUEST_CAPTURE_MODES = {"off", "summary", "full"}
+_DEFAULT_MAX_LLM_REQUEST_CONTENT = 200_000
 
 
 def _is_user_visible_human_message(message: BaseMessage) -> bool:
@@ -53,6 +56,8 @@ class RunJournal(BaseCallbackHandler):
         event_store: RunEventStore,
         *,
         track_token_usage: bool = True,
+        capture_llm_requests: str = "off",
+        max_llm_request_content: int = _DEFAULT_MAX_LLM_REQUEST_CONTENT,
         flush_threshold: int = 20,
         progress_reporter: Callable[[dict], Awaitable[None]] | None = None,
         progress_flush_interval: float = 5.0,
@@ -62,6 +67,10 @@ class RunJournal(BaseCallbackHandler):
         self.thread_id = thread_id
         self._store = event_store
         self._track_tokens = track_token_usage
+        if capture_llm_requests not in _LLM_REQUEST_CAPTURE_MODES:
+            raise ValueError(f"capture_llm_requests must be one of {sorted(_LLM_REQUEST_CAPTURE_MODES)}, got {capture_llm_requests!r}")
+        self._capture_llm_requests = capture_llm_requests
+        self._max_llm_request_content = max(1, int(max_llm_request_content or _DEFAULT_MAX_LLM_REQUEST_CONTENT))
         self._flush_threshold = flush_threshold
         self._progress_reporter = progress_reporter
         self._progress_flush_interval = progress_flush_interval
@@ -126,6 +135,71 @@ class RunJournal(BaseCallbackHandler):
             text = self._message_text(message).strip()
             if text:
                 self._last_ai_msg = text[:2000]
+
+    @staticmethod
+    def _message_content_length(message: BaseMessage) -> int:
+        content = getattr(message, "content", "")
+        if isinstance(content, str):
+            return len(content)
+        return len(json.dumps(content, default=str, ensure_ascii=False))
+
+    def _message_request_summary(self, message: BaseMessage) -> dict[str, Any]:
+        additional_kwargs = getattr(message, "additional_kwargs", None)
+        additional_kwargs_keys = sorted(additional_kwargs.keys()) if isinstance(additional_kwargs, Mapping) else []
+        return {
+            "type": getattr(message, "type", None),
+            "name": getattr(message, "name", None),
+            "id": getattr(message, "id", None),
+            "content_preview": self._message_text(message)[:500],
+            "content_length": self._message_content_length(message),
+            "additional_kwargs_keys": additional_kwargs_keys,
+        }
+
+    def _build_llm_request_payload(self, serialized: dict, messages: list[list[BaseMessage]], kwargs: dict[str, Any]) -> dict[str, Any]:
+        mode = self._capture_llm_requests
+        message_count = sum(len(batch) for batch in messages)
+        if mode == "summary":
+            batches = [{"messages": [self._message_request_summary(message) for message in batch]} for batch in messages]
+        else:
+            batches = [{"messages": [message.model_dump() for message in batch]} for batch in messages]
+
+        payload: dict[str, Any] = {
+            "mode": mode,
+            "message_count": message_count,
+            "batch_count": len(messages),
+            "batches": batches,
+        }
+        if mode == "full":
+            payload.update(
+                {
+                    "serialized": serialized,
+                    "invocation_params": kwargs.get("invocation_params"),
+                    "options": kwargs.get("options"),
+                    "kwargs_keys": sorted(kwargs.keys()),
+                }
+            )
+        return payload
+
+    def _fit_llm_request_payload(self, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        encoded = json.dumps(payload, default=str, ensure_ascii=False).encode("utf-8")
+        if len(encoded) <= self._max_llm_request_content:
+            return payload, {}
+
+        preview_budget = max(1, self._max_llm_request_content - 512)
+        preview = encoded[:preview_budget].decode("utf-8", errors="ignore")
+        metadata = {
+            "content_truncated": True,
+            "original_byte_length": len(encoded),
+        }
+        return (
+            {
+                "mode": payload.get("mode"),
+                "truncated": True,
+                "original_byte_length": len(encoded),
+                "payload_json_preview": preview,
+            },
+            metadata,
+        )
 
     def on_chain_start(
         self,
@@ -203,8 +277,25 @@ class RunJournal(BaseCallbackHandler):
             [len(batch) for batch in messages],
         )
 
-        # Capture the first user message sent to the lead agent in this run.
         caller = self._identify_caller(tags)
+        if self._capture_llm_requests != "off":
+            payload = self._build_llm_request_payload(serialized, messages, kwargs)
+            payload, request_metadata = self._fit_llm_request_payload(payload)
+            self._put(
+                event_type="llm.chat.request",
+                category="trace",
+                content=payload,
+                metadata={
+                    "caller": caller,
+                    "capture_mode": self._capture_llm_requests,
+                    "llm_call_index": self._llm_call_index,
+                    "langchain_run_id": rid,
+                    "trace_content_limit": self._max_llm_request_content,
+                    **request_metadata,
+                },
+            )
+
+        # Capture the first user message sent to the lead agent in this run.
         if caller == "lead_agent" and not self._first_human_msg and messages:
             for batch in reversed(messages):
                 for m in reversed(batch):
@@ -331,7 +422,35 @@ class RunJournal(BaseCallbackHandler):
     def on_tool_start(self, serialized, input_str, *, run_id, parent_run_id=None, tags=None, metadata=None, inputs=None, **kwargs):
         """Handle tool start event, cache tool call ID for later correlation"""
         tool_call_id = str(run_id)
+        tool_name = (serialized or {}).get("name") or kwargs.get("name") or "unknown"
+        caller = self._identify_caller(tags)
         logger.debug("Tool start for node %s, tool_call_id=%s, tags=%s", run_id, tool_call_id, tags)
+        self._put(
+            event_type="tool.start",
+            category="trace",
+            content={
+                "tool_name": tool_name,
+                "input_keys": sorted(inputs.keys()) if isinstance(inputs, dict) else [],
+            },
+            metadata={**(metadata or {}), "caller": caller, "tool_call_id": tool_call_id},
+        )
+
+    def on_tool_error(self, error, *, run_id, parent_run_id=None, tags=None, metadata=None, name=None, **kwargs):
+        """Handle tool error event for timeline visibility."""
+        tool_call_id = str(run_id)
+        caller = self._identify_caller(tags)
+        self._put(
+            event_type="tool.error",
+            category="error",
+            content=str(error),
+            metadata={
+                **(metadata or {}),
+                "caller": caller,
+                "tool_call_id": tool_call_id,
+                "tool_name": name or kwargs.get("tool_name") or "unknown",
+                "error_type": type(error).__name__,
+            },
+        )
 
     def on_tool_end(self, output, *, run_id, parent_run_id=None, **kwargs):
         """Handle tool end event, append message and clear node data"""

@@ -272,6 +272,8 @@ async def run_agent(
                 thread_id=thread_id,
                 event_store=event_store,
                 track_token_usage=getattr(run_events_config, "track_token_usage", True),
+                capture_llm_requests=getattr(run_events_config, "capture_llm_requests", "off"),
+                max_llm_request_content=getattr(run_events_config, "max_llm_request_content", 200_000),
                 progress_reporter=lambda snapshot: run_manager.update_run_progress(run_id, **snapshot),
             )
 
