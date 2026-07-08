@@ -160,6 +160,8 @@ export interface Translations {
     demoChats: string;
     agents: string;
     scheduledTasks: string;
+    platformAdmin: string;
+    agentMonitoring: string;
     agentsDisabledTooltip: string;
     channels: string;
   };

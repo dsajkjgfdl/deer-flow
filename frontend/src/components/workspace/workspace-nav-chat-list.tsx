@@ -1,6 +1,12 @@
 "use client";
 
-import { BotIcon, CalendarClock, MessagesSquare } from "lucide-react";
+import {
+  ActivityIcon,
+  BotIcon,
+  CalendarClock,
+  MessagesSquare,
+  ShieldCheckIcon,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -16,12 +22,17 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useAgentsApiEnabled } from "@/core/agents";
+import { useAuth } from "@/core/auth/AuthProvider";
+import { canAccessPlatformAdmin } from "@/core/auth/roles";
 import { useI18n } from "@/core/i18n/hooks";
 
 export function WorkspaceNavChatList() {
   const { t } = useI18n();
+  const { user } = useAuth();
   const pathname = usePathname();
   const { enabled: agentsEnabled } = useAgentsApiEnabled();
+  const showPlatformAdmin = canAccessPlatformAdmin(user);
+
   return (
     <SidebarGroup className="pt-1">
       <SidebarMenu>
@@ -89,6 +100,35 @@ export function WorkspaceNavChatList() {
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>
+        {showPlatformAdmin && (
+          <>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                isActive={pathname.startsWith("/workspace/admin")}
+                asChild
+              >
+                <Link className="text-muted-foreground" href="/workspace/admin">
+                  <ShieldCheckIcon />
+                  <span>{t.sidebar.platformAdmin}</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                isActive={pathname.startsWith("/admin/monitoring")}
+                asChild
+              >
+                <Link
+                  className="text-muted-foreground"
+                  href="/admin/monitoring"
+                >
+                  <ActivityIcon />
+                  <span>{t.sidebar.agentMonitoring}</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </>
+        )}
       </SidebarMenu>
     </SidebarGroup>
   );
