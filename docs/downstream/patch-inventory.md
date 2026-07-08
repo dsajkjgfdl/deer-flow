@@ -27,16 +27,16 @@
 
 ## Candidate: Platform Management And Monitoring
 
-建议作为第二阶段优先迁移。该能力相对独立，但会涉及前后端和持久化。
+该批次已迁移到当前上游基底。后续官方升级时保留平台管理的独立 router、persistence、migration 和前端页面，不要用旧分支整文件覆盖新版上游。
 
 | Area | Status | Paths | Migration Notes |
 | --- | --- | --- | --- |
-| Platform admin routers | Keep | `backend/app/gateway/routers/platform_admin.py`, `backend/app/gateway/routers/platform_agents.py` | 不要覆盖 `routers/__init__.py`；在新版 router 注册方式下增量接入。 |
-| Platform persistence | Keep | `backend/packages/harness/deerflow/persistence/platform/*` | 检查上游新版迁移机制后再接入。 |
-| Platform config | Keep | `backend/packages/harness/deerflow/config/platform_config.py` | 尽量作为独立 config section，避免污染通用 config。 |
-| Platform migrations | Keep | `backend/packages/harness/deerflow/persistence/migrations/versions/20260529_agent_platform_mvp.py`, `20260602_channel_feedback_targets.py`, `20260615_tool_audit_content.py` | 需要确认与上游现有 Alembic revision 是否冲突。 |
-| Monitoring frontend | Keep | `frontend/src/components/platform-admin/monitoring/*`, `frontend/src/core/platform/*`, `frontend/src/app/admin/*` | 前端上游变化大，按页面和 API 类型逐块迁移。 |
-| Workspace admin frontend | Review | `frontend/src/components/workspace/admin/*`, `frontend/src/app/workspace/admin/page.tsx` | 确认新版导航和权限模型后再迁。 |
+| Platform admin routers | Migrated | `backend/app/gateway/routers/platform_admin.py`, `backend/app/gateway/routers/platform_agents.py` | 已按新版 router 注册方式增量接入。 |
+| Platform persistence | Migrated | `backend/packages/harness/deerflow/persistence/platform/*` | 已接入当前 persistence bootstrap 和 repository 测试。 |
+| Platform config | Migrated | `backend/packages/harness/deerflow/config/platform_config.py` | 作为独立 platform config section 保留。 |
+| Platform migrations | Migrated | `backend/packages/harness/deerflow/persistence/migrations/versions/0004_agent_platform_mvp.py` | 已改用当前上游 revision 序列，避免旧分支 revision 冲突。 |
+| Monitoring frontend | Migrated | `frontend/src/components/platform-admin/monitoring/*`, `frontend/src/core/platform/*`, `frontend/src/app/admin/*` | 已迁移平台监控页面、导入导出、详情和时间线组件。 |
+| Workspace admin frontend | Migrated | `frontend/src/components/workspace/admin/*`, `frontend/src/app/workspace/admin/page.tsx` | 已迁移 workspace 管理入口、agent catalog、assignment、feedback 和 audit 页面。 |
 
 Recommended verification:
 
@@ -77,7 +77,7 @@ $env:PYTHONPATH=".;packages/harness"
 | Tool concurrency limit | Migrated | `backend/packages/harness/deerflow/agents/middlewares/tool_concurrency_limit_middleware.py`, `backend/tests/test_tool_concurrency_limit_middleware.py` | 已作为通用 middleware 接入 lead runtime 和 SDK factory，在 `ToolErrorHandlingMiddleware` 前执行。 |
 | Tool error handling | Migrated | `backend/packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py`, `backend/tests/test_tool_error_handling_middleware.py` | 保留当前上游/本地的新子代理状态、skill metadata 和 runtime builder 结构，只增量接入并发限制。 |
 | MCP lifecycle fixes | Drop | `backend/packages/harness/deerflow/mcp/session_pool.py`, `mcp/tools.py`, `mcp/cache.py` | 当前上游基底已有更完整的 `_inflight`/owner-task session pool、stdio pooling + HTTP/SSE one-shot 逻辑和 `test_mcp_session_pool.py` 覆盖；不迁旧版 MCP 文件。 |
-| Tool audit content | Keep | `backend/packages/harness/deerflow/persistence/migrations/versions/0005_tool_audit_content.py`, `backend/packages/harness/deerflow/mcp/tools.py`, `backend/tests/test_tool_audit.py` | 已迁移：MCP tool 调用审计内容、Text2Cypher debug 入审计不入 agent 返回、HTTP MCP one-shot 审计 wrapper。 |
+| Tool audit content | Migrated | `backend/packages/harness/deerflow/persistence/migrations/versions/0005_tool_audit_content.py`, `backend/packages/harness/deerflow/mcp/tools.py`, `backend/tests/test_tool_audit.py` | 已迁移：MCP tool 调用审计内容、Text2Cypher debug 入审计不入 agent 返回、HTTP MCP one-shot 审计 wrapper。 |
 
 Recommended verification:
 
@@ -95,8 +95,8 @@ $env:PYTHONPATH=".;packages/harness"
 | --- | --- | --- | --- |
 | Gateway services | Review | `backend/app/gateway/services.py` | 上游新增 wait disconnect、workspace changes、scheduled tasks 等逻辑，不能用旧文件覆盖。 |
 | Thread runs router | Review | `backend/app/gateway/routers/thread_runs.py` | 先确认本地改动是否仍有必要。 |
-| Agent factory/runtime resolver | Keep | `backend/app/gateway/services.py`, `backend/packages/harness/deerflow/agents/runtime_resolver.py`, `backend/packages/harness/deerflow/agents/lead_agent/agent.py`, `backend/packages/harness/deerflow/tools/tools.py`, `backend/tests/test_agent_runtime_resolver.py`, `backend/tests/test_tools_runtime_policy.py` | 运行时 agent 分配生效链路已迁移：平台分配解析有效 agent，并把 MCP/技能/工具白名单写入运行配置供 lead agent 消费。 |
-| Run journal/tool audit | Keep | `backend/packages/harness/deerflow/runtime/journal.py`, `backend/packages/harness/deerflow/runtime/runs/worker.py`, `backend/tests/test_run_journal_llm_requests.py` | 已迁移：RunJournal 支持可配置 LLM request 捕获、tool start/error trace，worker 透传 run_events 配置。 |
+| Agent factory/runtime resolver | Migrated | `backend/app/gateway/services.py`, `backend/packages/harness/deerflow/agents/runtime_resolver.py`, `backend/packages/harness/deerflow/agents/lead_agent/agent.py`, `backend/packages/harness/deerflow/tools/tools.py`, `backend/tests/test_agent_runtime_resolver.py`, `backend/tests/test_tools_runtime_policy.py` | 运行时 agent 分配生效链路已迁移：平台分配解析有效 agent，并把 MCP/技能/工具白名单写入运行配置供 lead agent 消费。 |
+| Run journal/tool audit | Migrated | `backend/packages/harness/deerflow/runtime/journal.py`, `backend/packages/harness/deerflow/runtime/runs/worker.py`, `backend/tests/test_run_journal_llm_requests.py` | 已迁移：RunJournal 支持可配置 LLM request 捕获、tool start/error trace，worker 透传 run_events 配置。 |
 
 Recommended verification:
 
@@ -110,11 +110,11 @@ $env:PYTHONPATH=".;packages/harness"
 
 | Area | Status | Paths | Migration Notes |
 | --- | --- | --- | --- |
-| Landing/nav changes | Keep | `frontend/src/app/page.tsx`, `frontend/tests/unit/app/root-page.test.ts` | 二开版本固定不要官方导航页，`/` 必须直接跳转到 `/workspace/chats/new`；后续同步上游时保留该回归测试。 |
+| Landing/nav changes | Migrated | `frontend/src/app/page.tsx`, `frontend/tests/unit/app/root-page.test.ts` | 二开版本固定不要官方导航页，`/` 必须直接跳转到 `/workspace/chats/new`；后续同步上游时保留该回归测试。 |
 | Agent cards/display names | Migrated | `frontend/src/components/workspace/agents/agent-card.tsx`, `frontend/src/components/workspace/agent-welcome.tsx`, `frontend/src/app/workspace/agents/[agent_name]/chats/[thread_id]/page.tsx`, `frontend/src/core/agents/*`, `frontend/tests/unit/core/agents/display-name.test.ts` | 已接入后端 `display_name` 字段；HR Boss 可显示“人岗匹配智能体”，缺失或空白时回退内部 agent name。 |
 | Message list changes | Drop | `frontend/src/components/workspace/messages/*`, `frontend/src/core/messages/*` | 当前上游基底已包含 sidecar 选区、分支/重生成、反馈按钮、token attribution、隐藏消息过滤等更完整实现；不迁旧版 message-list 覆盖。 |
 | Thread hooks | Drop | `frontend/src/core/threads/*` | 当前上游基底已包含 hidden sidecar context、onSent guard、infinite history、thread search、branch/regenerate 和 sidecar 删除级联；不迁旧版 hooks 覆盖。 |
-| Platform admin UI | Keep | `frontend/src/components/platform-admin/*`, `frontend/src/core/platform/*` | 与平台管理后端一起迁移。 |
+| Platform admin UI | Migrated | `frontend/src/components/platform-admin/*`, `frontend/src/core/platform/*` | 已随平台管理后端一起迁移。 |
 
 Recommended verification:
 
@@ -128,9 +128,9 @@ pnpm test
 
 | Area | Status | Paths | Migration Notes |
 | --- | --- | --- | --- |
-| Root docs | Review | `README*.md`, `CHANGELOG*.md`, `AGENTS.md`, `CLAUDE.md` | 保留上游新版主文档；本地说明放在 `docs/downstream/*` 和 HR 部署文档。 |
-| CI workflows | Review | `.github/workflows/*` | 本地环境可能不使用 GitHub CI，默认保留上游，除非有明确内网 CI 需求。 |
-| Public skills | Review | `skills/public/*` | 上游新增 skill 可能有价值，不要按旧分支删除。 |
+| Root docs | Drop | `README*.md`, `CHANGELOG*.md`, `AGENTS.md`, `CLAUDE.md` | 不从旧分支覆盖上游新版主文档；本地说明放在 `docs/downstream/*` 和 HR 部署文档。 |
+| CI workflows | Drop | `.github/workflows/*` | 不迁旧分支 workflow；默认保留上游 CI，除非后续有明确内网 CI 需求再新增独立 workflow。 |
+| Public skills | Drop | `skills/public/*` | 不按旧分支删除或覆盖上游 public skills；HR/二开能力放在 `skills/custom/*`。 |
 | Agent maintenance skills | Drop | `.agent/skills/blocking-io-guard/*`, `.agent/skills/deerflow-maintainer-orchestrator/*` | 旧分支删除不代表新基底也要删，默认保留上游。 |
 
 ## Do Not Migrate By Default
@@ -147,18 +147,17 @@ pnpm test
 建议下一批提交：
 
 ```text
-整理文档 CI public skills
+收尾验证和合并准备
 ```
 
 Scope:
 
-- Root docs and downstream docs placement.
-- CI workflow policy.
-- Public skills and old agent-maintenance skill deletes.
+- Run final backend/frontend regression commands.
+- Review optional `Gateway services` and `Thread runs router` review-only rows.
+- Prepare merge or PR from `codex/upstream-sync-20260706`.
 
 Exit criteria:
 
-- No broad overwrite of upstream README/CHANGELOG/CI.
-- Keep local HR/downstream docs in dedicated paths.
-- Existing no-navigation regression remains intact.
-- Public skills decision documented.
+- Worktree is clean.
+- All required migration rows are `Migrated` or intentionally `Drop`.
+- Review-only rows have a clear owner or are deferred to future upstream-sync rounds.
