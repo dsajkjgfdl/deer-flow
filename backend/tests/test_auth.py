@@ -478,6 +478,55 @@ def test_update_user_raises_when_row_concurrently_deleted(tmp_path):
     asyncio.run(_run())
 
 
+def test_sqlite_repository_lists_users_with_total_count():
+    """Platform admin user listing requires SQLiteUserRepository.list_users()."""
+    import asyncio
+    import tempfile
+
+    from app.gateway.auth.repositories.sqlite import SQLiteUserRepository
+
+    async def _run() -> None:
+        from deerflow.persistence.engine import (
+            close_engine,
+            get_session_factory,
+            init_engine,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            url = f"sqlite+aiosqlite:///{tmpdir}/scratch.db"
+            await init_engine("sqlite", url=url, sqlite_dir=tmpdir)
+            try:
+                repo = SQLiteUserRepository(get_session_factory())
+                first = await repo.create_user(
+                    User(
+                        email="first@test.com",
+                        password_hash="fakehash",
+                        system_role="user",
+                    )
+                )
+                second = await repo.create_user(
+                    User(
+                        email="second@test.com",
+                        password_hash="fakehash",
+                        system_role="admin",
+                    )
+                )
+
+                users, total = await repo.list_users(limit=1, offset=0)
+
+                assert total == 2
+                assert users == [second]
+
+                users, total = await repo.list_users(limit=1, offset=1)
+
+                assert total == 2
+                assert users == [first]
+            finally:
+                await close_engine()
+
+    asyncio.run(_run())
+
+
 # ── Token Versioning ───────────────────────────────────────────────────────
 
 

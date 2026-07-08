@@ -79,6 +79,11 @@ class UserRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def list_users(self, *, limit: int = 50, offset: int = 0) -> tuple[list[User], int]:
+        """Return a paginated user list and the total user count."""
+        raise NotImplementedError
+
+    @abstractmethod
     async def count_users(self) -> int:
         """Return total number of registered users."""
         raise NotImplementedError
