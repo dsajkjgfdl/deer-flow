@@ -70,6 +70,24 @@ def test_install_runtime_context_preserves_existing_thread_id_and_threads_app_co
     assert config["context"]["app_config"] is app_config
 
 
+def test_install_runtime_context_exposes_run_id_to_configurable_for_tool_audit():
+    config = {"configurable": {"thread_id": "thread-1", "agent_name": "hr-boss-agent"}}
+
+    _install_runtime_context(
+        config,
+        {
+            "thread_id": "thread-1",
+            "run_id": "run-1",
+            "agent_name": "hr-boss-agent",
+        },
+    )
+
+    assert config["context"]["run_id"] == "run-1"
+    assert config["configurable"]["thread_id"] == "thread-1"
+    assert config["configurable"]["run_id"] == "run-1"
+    assert config["configurable"]["agent_name"] == "hr-boss-agent"
+
+
 @pytest.mark.anyio
 async def test_run_agent_threads_explicit_app_config_into_config_only_factory():
     run_manager = RunManager()

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, desc, func, or_, select
+from sqlalchemy import and_, delete, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from deerflow.persistence.platform.model import AdminAuditLogRow, AgentAssignmentRow, ToolAuditLogRow
@@ -325,8 +325,26 @@ class PlatformRepository:
             rows = (await session.execute(stmt)).scalars()
             return [self._run_row_to_monitoring_dict(row) for row in rows]
 
-    async def list_tool_audits_for_run(self, run_id: str) -> list[dict[str, Any]]:
-        stmt = select(ToolAuditLogRow).where(ToolAuditLogRow.run_id == run_id).order_by(ToolAuditLogRow.created_at.asc(), ToolAuditLogRow.id.asc())
+    async def list_tool_audits_for_run(
+        self,
+        run_id: str,
+        *,
+        thread_id: str | None = None,
+        started_at: datetime | None = None,
+        ended_at: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        filters = [ToolAuditLogRow.run_id == run_id]
+        if thread_id is not None and started_at is not None:
+            unattributed_filters = [
+                ToolAuditLogRow.run_id.is_(None),
+                ToolAuditLogRow.thread_id == thread_id,
+                ToolAuditLogRow.created_at >= started_at,
+            ]
+            if ended_at is not None:
+                unattributed_filters.append(ToolAuditLogRow.created_at <= ended_at)
+            filters.append(and_(*unattributed_filters))
+
+        stmt = select(ToolAuditLogRow).where(or_(*filters)).order_by(ToolAuditLogRow.created_at.asc(), ToolAuditLogRow.id.asc())
         async with self._sf() as session:
             rows = (await session.execute(stmt)).scalars()
             return [self._row_to_dict(row) for row in rows]

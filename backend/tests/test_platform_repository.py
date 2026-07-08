@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
+from sqlalchemy import update
 
 from deerflow.persistence.platform import PlatformRepository
+from deerflow.persistence.platform.model import ToolAuditLogRow
 
 
 async def _make_repo(tmp_path) -> PlatformRepository:
@@ -79,5 +83,79 @@ async def test_tool_audit_summary_groups_by_agent_and_tool(tmp_path) -> None:
         [failure] = await repo.recent_tool_failures()
         assert failure["run_id"] == "run-2"
         assert failure["content_json"] == {}
+    finally:
+        await _cleanup()
+
+
+@pytest.mark.anyio
+async def test_list_tool_audits_for_run_includes_unattributed_rows_in_run_window(tmp_path) -> None:
+    repo = await _make_repo(tmp_path)
+    try:
+        inside = await repo.write_tool_audit(
+            thread_id="thread-1",
+            agent_name="hr-boss-agent",
+            tool_name="text2cypher_answer_question",
+            mcp_server_name="text2cypher",
+            status="success",
+        )
+        outside_time = await repo.write_tool_audit(
+            thread_id="thread-1",
+            agent_name="hr-boss-agent",
+            tool_name="text2cypher_query_employees",
+            mcp_server_name="text2cypher",
+            status="success",
+        )
+        outside_thread = await repo.write_tool_audit(
+            thread_id="thread-2",
+            agent_name="hr-boss-agent",
+            tool_name="hr-graphrag-qa_query_global",
+            mcp_server_name="hr-graphrag-qa",
+            status="success",
+        )
+        attributed = await repo.write_tool_audit(
+            run_id="run-1",
+            thread_id="thread-1",
+            agent_name="hr-boss-agent",
+            tool_name="text2cypher_query_employees",
+            mcp_server_name="text2cypher",
+            status="success",
+        )
+
+        start = datetime(2026, 7, 8, 3, 6, 25, tzinfo=UTC)
+        end = datetime(2026, 7, 8, 3, 6, 30, tzinfo=UTC)
+        from deerflow.persistence.engine import get_session_factory
+
+        sf = get_session_factory()
+        async with sf() as session:
+            await session.execute(
+                update(ToolAuditLogRow)
+                .where(ToolAuditLogRow.id == inside["id"])
+                .values(created_at=start + timedelta(seconds=2))
+            )
+            await session.execute(
+                update(ToolAuditLogRow)
+                .where(ToolAuditLogRow.id == outside_time["id"])
+                .values(created_at=start - timedelta(seconds=1))
+            )
+            await session.execute(
+                update(ToolAuditLogRow)
+                .where(ToolAuditLogRow.id == outside_thread["id"])
+                .values(created_at=start + timedelta(seconds=2))
+            )
+            await session.execute(
+                update(ToolAuditLogRow)
+                .where(ToolAuditLogRow.id == attributed["id"])
+                .values(created_at=start + timedelta(seconds=1))
+            )
+            await session.commit()
+
+        audits = await repo.list_tool_audits_for_run(
+            "run-1",
+            thread_id="thread-1",
+            started_at=start,
+            ended_at=end,
+        )
+
+        assert [audit["id"] for audit in audits] == [attributed["id"], inside["id"]]
     finally:
         await _cleanup()

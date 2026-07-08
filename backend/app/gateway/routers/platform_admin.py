@@ -785,6 +785,35 @@ async def _list_run_events_for_admin(
     return await event_store.list_events(thread_id, run_id, **kwargs)
 
 
+def _tool_audit_window_end(run: dict[str, Any]) -> Any | None:
+    status = str(run.get("status") or "")
+    if status in {"success", "error", "timeout", "interrupted"}:
+        return run.get("updated_at")
+    return None
+
+
+async def _list_tool_audits_for_timeline(
+    repo: Any,
+    *,
+    run: dict[str, Any],
+    thread_id: str,
+    run_id: str,
+) -> list[dict[str, Any]]:
+    method = repo.list_tool_audits_for_run
+    params = signature(method).parameters
+    supports_kwargs = any(param.kind == param.VAR_KEYWORD for param in params.values())
+    kwargs: dict[str, Any] = {}
+    values = {
+        "thread_id": thread_id,
+        "started_at": run.get("created_at"),
+        "ended_at": _tool_audit_window_end(run),
+    }
+    for key, value in values.items():
+        if supports_kwargs or key in params:
+            kwargs[key] = value
+    return await _maybe_await(method(run_id, **kwargs))
+
+
 def _timeline_run_event(event: dict[str, Any]) -> dict[str, Any]:
     occurred_at = _iso_text(event.get("created_at") or event.get("occurred_at"))
     return {
@@ -1137,7 +1166,7 @@ async def monitoring_run_timeline(
     thread_id = str(normalized_run["thread_id"])
     channel_entries = await _channel_entries_by_thread(request)
     run_events = await _list_run_events_for_admin(request, thread_id=thread_id, run_id=run_id, limit=limit)
-    tool_audits = await repo.list_tool_audits_for_run(run_id)
+    tool_audits = await _list_tool_audits_for_timeline(repo, run=run, thread_id=thread_id, run_id=run_id)
     events = _merge_timeline_events(run_events, tool_audits)
     if not events:
         events = _summary_timeline_events(normalized_run)

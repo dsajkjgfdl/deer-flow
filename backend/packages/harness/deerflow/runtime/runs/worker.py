@@ -120,9 +120,17 @@ def _install_runtime_context(config: dict, runtime_context: dict[str, Any]) -> N
             existing_context.setdefault(DEERFLOW_TRACE_METADATA_KEY, runtime_context[DEERFLOW_TRACE_METADATA_KEY])
         if "app_config" in runtime_context:
             existing_context["app_config"] = runtime_context["app_config"]
-        return
+    else:
+        config["context"] = dict(runtime_context)
 
-    config["context"] = dict(runtime_context)
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        configurable = {}
+        config["configurable"] = configurable
+    configurable.setdefault("thread_id", runtime_context["thread_id"])
+    # Tool wrappers can reliably see LangGraph's configurable payload even when
+    # ToolRuntime.context is not injected into the wrapped StructuredTool.
+    configurable["run_id"] = runtime_context["run_id"]
 
 
 def _compute_agent_factory_supports_app_config(agent_factory: Any) -> bool:
