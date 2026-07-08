@@ -819,6 +819,25 @@ def test_authenticate_skips_rehash_for_v2_hash():
     mock_repo.update_user.assert_not_called()
 
 
+def test_local_provider_list_users_delegates_to_repository():
+    """Platform admin user listing requires LocalAuthProvider.list_users()."""
+    import asyncio
+
+    from app.gateway.auth.local_provider import LocalAuthProvider
+
+    user = User(id=uuid4(), email="admin@example.com", system_role="admin")
+    mock_repo = MagicMock()
+    mock_repo.list_users = AsyncMock(return_value=([user], 1))
+
+    provider = LocalAuthProvider(mock_repo)
+
+    users, total = asyncio.run(provider.list_users(limit=10, offset=5))
+
+    assert users == [user]
+    assert total == 1
+    mock_repo.list_users.assert_awaited_once_with(limit=10, offset=5)
+
+
 def test_validate_next_param_rejects_colon_paths():
     from app.gateway.routers.auth import validate_next_param
 
