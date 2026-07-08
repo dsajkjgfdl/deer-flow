@@ -31,6 +31,7 @@ import { TokenUsageIndicator } from "@/components/workspace/token-usage-indicato
 import { Tooltip } from "@/components/workspace/tooltip";
 import { useActiveGoal } from "@/components/workspace/use-active-goal";
 import { useAgent } from "@/core/agents";
+import { getAgentDisplayName } from "@/core/agents/utils";
 import { useI18n } from "@/core/i18n/hooks";
 import { useModels } from "@/core/models/hooks";
 import { useNotification } from "@/core/notification/hooks";
@@ -54,6 +55,7 @@ export default function AgentChatPage() {
   }>();
 
   const { agent } = useAgent(agent_name);
+  const agentDisplayName = getAgentDisplayName(agent, agent_name);
 
   const { threadId, setThreadId, isNewThread, setIsNewThread, isMock } =
     useThreadChat();
@@ -203,7 +205,7 @@ export default function AgentChatPage() {
               <div className="flex min-w-0 shrink-0 items-center gap-1.5 rounded-md border px-2 py-1">
                 <BotIcon className="text-primary h-3.5 w-3.5" />
                 <span className="hidden max-w-24 truncate text-xs font-medium sm:inline sm:max-w-none">
-                  {agent?.name ?? agent_name}
+                  {agentDisplayName}
                 </span>
               </div>
 

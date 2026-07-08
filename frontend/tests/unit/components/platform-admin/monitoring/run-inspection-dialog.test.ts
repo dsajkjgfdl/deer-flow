@@ -1,6 +1,6 @@
-﻿import { createElement, type ReactNode } from "react";
+﻿import { describe, expect, test, rs } from "@rstest/core";
+import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, test, rs } from "@rstest/core";
 
 import type {
   MonitoringRunTimeline,

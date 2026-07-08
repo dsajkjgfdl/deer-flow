@@ -1,8 +1,10 @@
 export interface Agent {
   name: string;
+  display_name?: string | null;
   description: string;
   model: string | null;
   tool_groups: string[] | null;
+  mcp_servers: string[] | null;
   skills: string[] | null;
   soul?: string | null;
 }

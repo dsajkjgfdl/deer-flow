@@ -111,7 +111,7 @@ $env:PYTHONPATH=".;packages/harness"
 | Area | Status | Paths | Migration Notes |
 | --- | --- | --- | --- |
 | Landing/nav changes | Keep | `frontend/src/app/page.tsx`, `frontend/tests/unit/app/root-page.test.ts` | 二开版本固定不要官方导航页，`/` 必须直接跳转到 `/workspace/chats/new`；后续同步上游时保留该回归测试。 |
-| Agent cards/display names | Keep | `frontend/src/components/workspace/agents/agent-card.tsx`, `frontend/src/core/agents/*` | 与 HR Boss 展示有关，需适配新版 agent API。 |
+| Agent cards/display names | Migrated | `frontend/src/components/workspace/agents/agent-card.tsx`, `frontend/src/components/workspace/agent-welcome.tsx`, `frontend/src/app/workspace/agents/[agent_name]/chats/[thread_id]/page.tsx`, `frontend/src/core/agents/*`, `frontend/tests/unit/core/agents/display-name.test.ts` | 已接入后端 `display_name` 字段；HR Boss 可显示“人岗匹配智能体”，缺失或空白时回退内部 agent name。 |
 | Message list changes | Review | `frontend/src/components/workspace/messages/*`, `frontend/src/core/messages/*` | 上游新增 sidecar、workspace changes、引用等能力，禁止整文件覆盖。 |
 | Thread hooks | Review | `frontend/src/core/threads/*` | 与分支会话、workspace changes、反馈历史等上游新增功能冲突概率高。 |
 | Platform admin UI | Keep | `frontend/src/components/platform-admin/*`, `frontend/src/core/platform/*` | 与平台管理后端一起迁移。 |
@@ -147,17 +147,17 @@ pnpm test
 建议下一批提交：
 
 ```text
-迁移前端 HR 展示适配
+评估消息与线程 hooks
 ```
 
 Scope:
 
-- Agent cards/display names.
-- HR Boss frontend copy and model/agent metadata display.
-- Frontend tests for agent card/workspace display behavior.
+- Message list changes.
+- Thread hooks and send-message helpers.
+- Keep or drop local changes after comparing with upstream sidecar/workspace-changes behavior.
 
 Exit criteria:
 
-- Frontend checks/tests for touched files pass.
+- Touched message/thread unit tests pass.
 - Existing no-navigation regression remains intact.
 - No broad overwrite of upstream workspace message/thread UI.

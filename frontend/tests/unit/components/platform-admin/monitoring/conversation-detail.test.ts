@@ -1,6 +1,6 @@
-﻿import { createElement } from "react";
+﻿import { describe, expect, test, rs } from "@rstest/core";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, test, rs } from "@rstest/core";
 
 import type {
   MonitoringConversationDetail,
