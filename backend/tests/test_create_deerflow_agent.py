@@ -311,6 +311,7 @@ def test_always_on_error_handling(mock_create_agent):
     middleware = call_kwargs["middleware"]
     mw_types = [type(m).__name__ for m in middleware]
     assert "DanglingToolCallMiddleware" in mw_types
+    assert "ToolConcurrencyLimitMiddleware" in mw_types
     assert "ToolErrorHandlingMiddleware" in mw_types
     tool_error_middleware = next(m for m in middleware if type(m).__name__ == "ToolErrorHandlingMiddleware")
     assert tool_error_middleware._app_config is None
@@ -800,6 +801,7 @@ def test_full_chain_order(mock_create_agent):
         "SandboxMiddleware",
         "DanglingToolCallMiddleware",
         "MyGuardrail",
+        "ToolConcurrencyLimitMiddleware",
         "ToolErrorHandlingMiddleware",
         "MySummarization",
         "TodoMiddleware",

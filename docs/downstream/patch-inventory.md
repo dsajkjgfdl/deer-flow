@@ -74,9 +74,9 @@ $env:PYTHONPATH=".;packages/harness"
 
 | Area | Status | Paths | Migration Notes |
 | --- | --- | --- | --- |
-| Tool concurrency limit | Keep | `backend/packages/harness/deerflow/agents/middlewares/tool_concurrency_limit_middleware.py` | 优先做成通用 middleware，不写 HR 特例。 |
-| Tool error handling | Keep | `backend/packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py` | 与上游错误处理合并，不能覆盖新状态码和新子代理结果格式。 |
-| MCP lifecycle fixes | Review | `backend/packages/harness/deerflow/mcp/session_pool.py`, `mcp/tools.py`, `mcp/cache.py` | 上游已修 HTTP/SSE session pooling，迁移前逐行比对。 |
+| Tool concurrency limit | Migrated | `backend/packages/harness/deerflow/agents/middlewares/tool_concurrency_limit_middleware.py`, `backend/tests/test_tool_concurrency_limit_middleware.py` | 已作为通用 middleware 接入 lead runtime 和 SDK factory，在 `ToolErrorHandlingMiddleware` 前执行。 |
+| Tool error handling | Migrated | `backend/packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py`, `backend/tests/test_tool_error_handling_middleware.py` | 保留当前上游/本地的新子代理状态、skill metadata 和 runtime builder 结构，只增量接入并发限制。 |
+| MCP lifecycle fixes | Drop | `backend/packages/harness/deerflow/mcp/session_pool.py`, `mcp/tools.py`, `mcp/cache.py` | 当前上游基底已有更完整的 `_inflight`/owner-task session pool、stdio pooling + HTTP/SSE one-shot 逻辑和 `test_mcp_session_pool.py` 覆盖；不迁旧版 MCP 文件。 |
 | Tool audit content | Keep | `backend/packages/harness/deerflow/persistence/migrations/versions/0005_tool_audit_content.py`, `backend/packages/harness/deerflow/mcp/tools.py`, `backend/tests/test_tool_audit.py` | 已迁移：MCP tool 调用审计内容、Text2Cypher debug 入审计不入 agent 返回、HTTP MCP one-shot 审计 wrapper。 |
 
 Recommended verification:
@@ -84,7 +84,7 @@ Recommended verification:
 ```powershell
 cd backend
 $env:PYTHONPATH=".;packages/harness"
-.\.venv\Scripts\python.exe -m pytest tests/test_mcp_session_pool.py tests/test_tool_error_handling_middleware.py tests/test_tool_concurrency_limit_middleware.py tests/test_mcp_filtering.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_mcp_session_pool.py tests/test_tool_error_handling_middleware.py tests/test_tool_concurrency_limit_middleware.py tests/test_create_deerflow_agent.py -q
 ```
 
 ## Candidate: Gateway And Runtime
@@ -147,17 +147,17 @@ pnpm test
 建议下一批提交：
 
 ```text
-迁移工具中间件
+迁移前端 HR 展示适配
 ```
 
 Scope:
 
-- Tool concurrency limit middleware.
-- Tool error handling middleware.
-- MCP session/cache/tool runtime fixes that are still necessary on the current upstream base.
+- Agent cards/display names.
+- HR Boss frontend copy and model/agent metadata display.
+- Frontend tests for agent card/workspace display behavior.
 
 Exit criteria:
 
-- Tool/MCP middleware tests pass.
-- Existing run journal/tool audit tests still pass.
-- No broad overwrite of upstream MCP session pooling or tool-call result formatting.
+- Frontend checks/tests for touched files pass.
+- Existing no-navigation regression remains intact.
+- No broad overwrite of upstream workspace message/thread UI.

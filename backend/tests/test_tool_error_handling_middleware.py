@@ -5,6 +5,7 @@ import pytest
 from langchain_core.messages import ToolMessage
 from langgraph.errors import GraphInterrupt
 
+from deerflow.agents.middlewares.tool_concurrency_limit_middleware import ToolConcurrencyLimitMiddleware
 from deerflow.agents.middlewares.tool_error_handling_middleware import (
     ToolErrorHandlingMiddleware,
     build_lead_runtime_middlewares,
@@ -142,14 +143,14 @@ def test_build_subagent_runtime_middlewares_threads_app_config_to_llm_middleware
     middlewares = build_subagent_runtime_middlewares(app_config=app_config, lazy_init=False)
 
     assert captured["app_config"] is app_config
-    # 8 baseline (InputSanitization, ToolOutputBudget, ThreadData, Sandbox,
-    # DanglingToolCall, LLMErrorHandling, SandboxAudit, ToolErrorHandling)
+    # 9 baseline (InputSanitization, ToolOutputBudget, ThreadData, Sandbox,
+    # DanglingToolCall, LLMErrorHandling, SandboxAudit, ToolConcurrency, ToolErrorHandling)
     # + 1 ReadBeforeWriteMiddleware + 1 LoopDetectionMiddleware
     # + 1 SafetyFinishReasonMiddleware (all enabled by default).
     from deerflow.agents.middlewares.safety_finish_reason_middleware import SafetyFinishReasonMiddleware
     from deerflow.agents.middlewares.tool_output_budget_middleware import ToolOutputBudgetMiddleware
 
-    assert len(middlewares) == 11
+    assert len(middlewares) == 12
     assert isinstance(middlewares[0], FakeMiddleware)  # InputSanitizationMiddleware stub
     assert isinstance(middlewares[1], ToolOutputBudgetMiddleware)
     assert any(isinstance(m, ToolErrorHandlingMiddleware) for m in middlewares)
@@ -221,7 +222,7 @@ def test_build_lead_runtime_middlewares_chain_order_matches_agents_md():
         assert len(matches) == 1, f"expected exactly one {label}, got indices {matches}"
         return matches[0]
 
-    # Mirrors AGENTS.md "Shared runtime base" items 1-10 (non-optional spine).
+    # Mirrors AGENTS.md "Shared runtime base" items 1-11 (non-optional spine).
     expected_order: list[tuple[str, type]] = [
         ("InputSanitizationMiddleware", InputSanitizationMiddleware),
         ("ToolOutputBudgetMiddleware", ToolOutputBudgetMiddleware),
@@ -232,6 +233,7 @@ def test_build_lead_runtime_middlewares_chain_order_matches_agents_md():
         ("LLMErrorHandlingMiddleware", LLMErrorHandlingMiddleware),
         ("SandboxAuditMiddleware", SandboxAuditMiddleware),
         ("ReadBeforeWriteMiddleware", ReadBeforeWriteMiddleware),
+        ("ToolConcurrencyLimitMiddleware", ToolConcurrencyLimitMiddleware),
         ("ToolErrorHandlingMiddleware", ToolErrorHandlingMiddleware),
     ]
     actual = [(label, idx_of(cls, label=label)) for label, cls in expected_order]

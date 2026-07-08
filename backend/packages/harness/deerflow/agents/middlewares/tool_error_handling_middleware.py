@@ -218,6 +218,18 @@ def _build_runtime_middlewares(
 
         tail.append(ReadBeforeWriteMiddleware())
 
+    from deerflow.agents.middlewares.tool_concurrency_limit_middleware import (
+        DEFAULT_TOOL_CONCURRENCY_LIMITS,
+        DEFAULT_TOOL_PER_RUN_LIMITS,
+        ToolConcurrencyLimitMiddleware,
+    )
+
+    tail.append(
+        ToolConcurrencyLimitMiddleware(
+            DEFAULT_TOOL_CONCURRENCY_LIMITS,
+            per_run_limits=DEFAULT_TOOL_PER_RUN_LIMITS,
+        )
+    )
     tail.append(ToolErrorHandlingMiddleware(app_config=app_config))
 
     return [*outer_wrappers, *thread_hooks, *tail]
