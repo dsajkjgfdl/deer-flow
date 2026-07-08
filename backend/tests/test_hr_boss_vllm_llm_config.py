@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 QWEN_BASE_URL = "http://36.212.39.231:11435/v1"
 

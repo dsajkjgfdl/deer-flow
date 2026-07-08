@@ -34,6 +34,9 @@ from langchain_core.messages.tool import tool_call_chunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_openai import ChatOpenAI
 from langchain_openai.chat_models.base import _create_usage_metadata
+from pydantic import Field
+
+from deerflow.models.context_budget import ContextPreflightConfig, check_chat_payload_context_budget
 
 
 def _normalize_vllm_chat_template_kwargs(payload: dict[str, Any]) -> None:
@@ -160,6 +163,14 @@ class VllmChatModel(ChatOpenAI):
     """ChatOpenAI variant that preserves vLLM reasoning fields across turns."""
 
     model_config = {"arbitrary_types_allowed": True}
+    max_context_tokens: int | None = Field(
+        default=None,
+        description="Maximum total context window for prompt plus reserved output tokens.",
+    )
+    context_preflight: ContextPreflightConfig = Field(
+        default_factory=ContextPreflightConfig,
+        description="Final chat payload budget preflight settings.",
+    )
 
     @property
     def _llm_type(self) -> str:
@@ -188,6 +199,13 @@ class VllmChatModel(ChatOpenAI):
             for payload_msg, ai_msg in zip(assistant_payloads, ai_messages):
                 _restore_reasoning_field(payload_msg, ai_msg)
 
+        check_chat_payload_context_budget(
+            payload,
+            model=self.model_name,
+            max_context_tokens=self.max_context_tokens,
+            config=self.context_preflight,
+            fallback_reserved_output_tokens=self.max_tokens,
+        )
         return payload
 
     def _create_chat_result(self, response: dict | openai.BaseModel, generation_info: dict | None = None) -> ChatResult:

@@ -55,6 +55,13 @@ def _enable_stream_usage_by_default(model_use_path: str, model_settings_from_con
         model_settings_from_config["stream_usage"] = True
 
 
+def _drop_unsupported_internal_model_settings(model_class: type[BaseChatModel], model_settings_from_config: dict) -> None:
+    supported_fields = getattr(model_class, "model_fields", {})
+    for key in ("max_context_tokens", "context_preflight"):
+        if key not in supported_fields:
+            model_settings_from_config.pop(key, None)
+
+
 def _normalize_openai_base_url(model_use_path: str, model_settings_from_config: dict) -> None:
     """Map the common ``api_base`` alias to ``base_url`` for OpenAI-compatible clients.
 
@@ -283,6 +290,7 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
         if "stream_usage" in getattr(model_class, "model_fields", {}):
             model_settings_from_config["stream_usage"] = True
 
+    _drop_unsupported_internal_model_settings(model_class, model_settings_from_config)
     _warn_unknown_model_settings(model_config.use, model_class, name, model_settings_from_config)
 
     model_instance = model_class(**kwargs, **model_settings_from_config)

@@ -52,21 +52,22 @@ pnpm test -- platform
 
 ## Candidate: Model Switching And Context Budget
 
-这部分与 HR Boss 体验强相关，但可能与上游模型工厂和 memory/context 改动冲突。
+该批次已迁移到当前上游基底。保留现有上游模型工厂修复，仅增量接入 HR Qwen/vLLM 所需的最终请求上下文预算预检。
 
 | Area | Status | Paths | Migration Notes |
 | --- | --- | --- | --- |
-| Qwen/VLLM model provider | Keep | `backend/packages/harness/deerflow/models/vllm_provider.py`, `backend/packages/harness/deerflow/models/factory.py` | 先确认上游新版 `api_base -> base_url` 和 thinking support 改动，避免回退官方修复。 |
-| Context budget model | Review | `backend/packages/harness/deerflow/models/context_budget.py` | 评估是否还能独立存在，或上游已有替代。 |
-| Context preflight | Keep | `backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py`, `summarization_middleware.py` | 只迁 HR 必需部分，避免覆盖上游 staleness/memory 改动。 |
-| HR model tests | Migrated | `backend/tests/test_hr_boss_vllm_llm_config.py`, `backend/tests/test_hr_boss_model_benchmark.py` | 已迁，后续作为回归锚点。 |
+| Qwen/VLLM model provider | Migrated | `backend/packages/harness/deerflow/models/vllm_provider.py`, `backend/packages/harness/deerflow/models/factory.py` | 保留当前分支的 `api_base -> base_url`、`stream_usage`、`stream_chunk_timeout` 和未知参数告警逻辑，增量接入 vLLM context preflight。 |
+| Context budget model | Migrated | `backend/packages/harness/deerflow/models/context_budget.py`, `backend/tests/test_context_budget.py` | 恢复最终 chat payload token 估算、超限报错和 `trim` 策略，作为 vLLM 请求前保护层。 |
+| Context preflight config | Migrated | `backend/packages/harness/deerflow/config/model_config.py` | `max_context_tokens` 与 `context_preflight` 进入模型配置 schema；模型工厂会过滤不支持这些内部字段的 provider。 |
+| Dynamic context and summarization | Migrated | `backend/packages/harness/deerflow/agents/middlewares/dynamic_context_middleware.py`, `backend/packages/harness/deerflow/agents/middlewares/summarization_middleware.py` | 已在当前分支保留，并纳入本批回归测试。 |
+| HR model tests | Migrated | `backend/tests/test_hr_boss_vllm_llm_config.py`, `backend/tests/test_hr_boss_model_benchmark.py` | 继续作为 HR Qwen/DeepSeek 配置回归锚点。 |
 
 Recommended verification:
 
 ```powershell
 cd backend
 $env:PYTHONPATH=".;packages/harness"
-.\.venv\Scripts\python.exe -m pytest tests/test_model_factory.py tests/test_hr_boss_vllm_llm_config.py tests/test_hr_boss_model_benchmark.py tests/test_summarization_middleware.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_context_budget.py tests/test_vllm_provider.py tests/test_model_factory.py tests/test_dynamic_context_middleware.py tests/test_summarization_middleware.py tests/test_hr_boss_vllm_llm_config.py tests/test_hr_boss_model_benchmark.py -q
 ```
 
 ## Candidate: Tool And MCP Runtime Adaptations
@@ -146,18 +147,17 @@ pnpm test
 建议下一批提交：
 
 ```text
-迁移平台管理
+迁移工具中间件
 ```
 
 Scope:
 
-- Backend platform routers.
-- Platform persistence models/repositories.
-- Platform migrations after revision conflict check.
-- Platform monitoring tests.
+- Tool concurrency limit middleware.
+- Tool error handling middleware.
+- MCP session/cache/tool runtime fixes that are still necessary on the current upstream base.
 
 Exit criteria:
 
-- Platform-related backend tests pass.
-- HR Boss and Huoju regression tests still pass.
-- No broad overwrite of gateway/runtime/frontend files.
+- Tool/MCP middleware tests pass.
+- Existing run journal/tool audit tests still pass.
+- No broad overwrite of upstream MCP session pooling or tool-call result formatting.

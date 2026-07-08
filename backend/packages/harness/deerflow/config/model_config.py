@@ -13,6 +13,14 @@ class ModelConfig(BaseModel):
     )
     model: str = Field(..., description="Model name")
     model_config = ConfigDict(extra="allow")
+    max_context_tokens: int | None = Field(
+        default=None,
+        description="Maximum total context window for prompt plus reserved output tokens.",
+    )
+    context_preflight: dict = Field(
+        default_factory=dict,
+        description="Final chat payload budget preflight settings.",
+    )
     use_responses_api: bool | None = Field(
         default=None,
         description="Whether to route OpenAI ChatOpenAI calls through the /v1/responses API",

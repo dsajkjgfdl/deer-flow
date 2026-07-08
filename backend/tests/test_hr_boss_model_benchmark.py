@@ -6,8 +6,8 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from scripts import benchmark_hr_boss_models as benchmark
-from deerflow.config.memory_config import MemoryConfig
+from deerflow.config.memory_config import MemoryConfig  # noqa: E402
+from scripts import benchmark_hr_boss_models as benchmark  # noqa: E402
 
 
 def test_provider_unavailable_answer_is_marked_as_error() -> None:
